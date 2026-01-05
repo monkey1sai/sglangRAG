@@ -17,7 +17,7 @@ try:
 except:
     pass
 
-print("Starting 50-Tools TPS Benchmark Script...", flush=True)
+print("開始執行 50-Tools TPS 基準測試腳本...", flush=True)
 
 
 def load_env_file(filepath):
@@ -41,11 +41,77 @@ TOOL_COUNT = 12
 LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
 LOG_FILE = os.path.join(LOG_DIR, "benchmark_50_tools_tps.log")
 
+LOCATION_TRANSLATIONS = {
+    "living_room": "客廳",
+    "bedroom": "臥室",
+    "kitchen": "廚房",
+    "bathroom": "浴室",
+    "home": "家裡",
+}
+
+DEVICE_ID_TRANSLATIONS = {
+    "ac_1": "冷氣",
+    "air_purifier_1": "空氣清淨機",
+    "air_cleaner": "空氣清淨機",
+    "air_cleaner_1": "空氣清淨機",
+    "robot_vacuum_1": "掃地機器人",
+    "lights_1": "燈",
+    "water_heater_1": "熱水器",
+    "fridge_1": "冰箱",
+    "tv_1": "電視",
+    "curtain_1": "窗簾",
+    "door_lock_1": "大門門鎖",
+    "security_camera_1": "監視器",
+    "siren_1": "警報器",
+    "motion_sensor_1": "動作感測器",
+}
+
 
 def log_print(message, *, end="\n", flush=False):
     print(message, end=end, flush=flush)
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(message + end)
+
+
+def _translate_value(key, value):
+    if not isinstance(value, str):
+        return value
+    if key == "location":
+        return LOCATION_TRANSLATIONS.get(value, value)
+    if key == "device_id":
+        return DEVICE_ID_TRANSLATIONS.get(value, value)
+    return value
+
+
+def _localize_obj(obj):
+    if isinstance(obj, list):
+        return [_localize_obj(item) for item in obj]
+    if isinstance(obj, dict):
+        localized = {}
+        for key, value in obj.items():
+            if isinstance(value, (dict, list)):
+                localized[key] = _localize_obj(value)
+            else:
+                localized[key] = _translate_value(key, value)
+        return localized
+    return obj
+
+
+def localize_output(output):
+    if not isinstance(output, str) or not output.strip():
+        return output
+    stripped = output.strip()
+    try:
+        parsed = json.loads(stripped)
+        localized = _localize_obj(parsed)
+        return json.dumps(localized, ensure_ascii=False)
+    except Exception:
+        # Best-effort string replacements for stream/partial outputs.
+        for src, dst in LOCATION_TRANSLATIONS.items():
+            stripped = stripped.replace(src, dst)
+        for src, dst in DEVICE_ID_TRANSLATIONS.items():
+            stripped = stripped.replace(src, dst)
+        return stripped
 
 
 class SystemMonitor:
@@ -159,7 +225,7 @@ def build_tools(count):
                 "type": "function",
                 "function": {
                     "name": f"{device}_{action}",
-                    "description": f"Smart home control: {device} {action}",
+                    "description": f"智慧家庭控制：{device} {action}",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -262,12 +328,11 @@ async def make_request(session, req_id, stream):
             {
                 "role": "system",
                 "content": (
-                    "You are a smart-home assistant. "
-                    "Decide whether a tool is needed. "
-                    "If a device action is requested, call the best tool. "
-                    "Only call tools that match the requested device and action. "
-                    "If multiple device actions are requested, call multiple tools. "
-                    "If no tool is needed, reply in one short sentence."
+                    "你是智慧家庭助理，請一律使用中文。"
+                    "你必須依使用者需求呼叫最合適的工具。"
+                    "只能呼叫與裝置與動作相符的工具；若同時需要多個動作，請呼叫多個工具。"
+                    "工具參數值（如 location、device_id）請務必使用中文（不要輸出 living_room、door_lock_1 這類英文/代碼）。"
+                    "若不需要工具，請用一句簡短中文回答。"
                 ),
             },
             {"role": "user", "content": prompt},
@@ -332,7 +397,11 @@ async def make_request(session, req_id, stream):
         log_print(f"Error: {e}")
 
     end = time.perf_counter()
-    log_print(f"[請求 ID: {req_id}]\n輸入: {prompt}\n輸出: {output}\n" + "-" * 30, flush=True)
+    display_output = localize_output(output)
+    log_print(
+        f"[請求 ID: {req_id}]\n輸入: {prompt}\n輸出: {display_output}\n" + "-" * 30,
+        flush=True,
+    )
     return {
         "ttft": (ttft - start) if ttft else (end - start),
         "total": end - start,
@@ -344,7 +413,7 @@ async def run(concurrency, total, stream, tps_non_stream):
     mode = "stream" if stream else "non-stream"
     tps_mode = "non-stream" if tps_non_stream else mode
     os.makedirs(LOG_DIR, exist_ok=True)
-    log_print(f"\n[{datetime.now().isoformat(timespec='seconds')}] Benchmark start")
+    log_print(f"\n[{datetime.now().isoformat(timespec='seconds')}] 基準測試開始")
     log_print(
         f"正在執行 {total} 個請求（並發數：{concurrency}），tools={TOOL_COUNT}，mode={mode}, tps_mode={tps_mode}...",
         flush=True,
@@ -383,7 +452,7 @@ async def run(concurrency, total, stream, tps_non_stream):
     log_print("資源使用監控")
     log_print(monitor.report())
     log_print("=" * 50)
-    log_print(f"[{datetime.now().isoformat(timespec='seconds')}] Benchmark end")
+    log_print(f"[{datetime.now().isoformat(timespec='seconds')}] 基準測試結束")
 
 
 if __name__ == "__main__":

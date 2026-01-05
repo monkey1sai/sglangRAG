@@ -80,7 +80,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "process_ecommerce_order",
-            "description": "Complex order tool",
+            "description": "處理電商訂單（含 VIP 客戶與多品項）",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -102,7 +102,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "analyze_logs",
-            "description": "Log tool",
+            "description": "分析叢集日誌（指定叢集與時間區間）",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -117,8 +117,8 @@ TOOLS = [
 
 def generate_request(idx):
     scenarios = [
-        (f"Order #{idx} for customer VIP-123. 2 laptops and 1 mouse.", "process_ecommerce_order"),
-        (f"Logs for Alpha cluster from 10am to 11am today.", "analyze_logs")
+        (f"請處理訂單 #{idx}：客戶 VIP-123，品項為筆電 2 台、滑鼠 1 個。", "process_ecommerce_order"),
+        (f"請分析 Alpha 叢集今天 10 點到 11 點的日誌。", "analyze_logs"),
     ]
     return random.choice(scenarios)
 
@@ -126,7 +126,16 @@ async def make_request(session, req_id):
     prompt, _ = generate_request(req_id)
     payload = {
         "model": MODEL_NAME,
-        "messages": [{"role": "system", "content": "You are an assistant. Use tools."}, {"role": "user", "content": prompt}],
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "你是助理。請一律使用中文回覆。"
+                    "當需要呼叫工具時，優先以 tool_calls 產生結構化參數，避免輸出多餘文字。"
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
         "tools": TOOLS,
         "stream": True
     }
