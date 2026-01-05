@@ -1,19 +1,23 @@
 # WD Gateway TTS — Web Client Reference（最小可用）
 
-本資料夾提供一個「官方 reference」的純 HTML/JS Web client，用於：
-- 設定 gateway URL / API key
-- 一鍵 connect / disconnect
-- 送出 `start`、`text_delta`、`text_end`、`cancel`
-- 播放 `audio_chunk`（raw PCM16，依 `audio_format=pcm16_wav` 的 v1 定義）
-- 顯示 debug：`session_id`、`chunk_seq`、`unit_index` 範圍、TTFA、errors
+本資料夾提供一個「官方 reference」的純 HTML/JS Web client，用於完成端到端流程：
 
-> 注意：Browser 原生 WebSocket **無法**自訂 `Authorization` header。此 reference 會把 API key 附加到 URL query：`?api_key=...`。若你的部署要求 `Authorization: Bearer ...`，請在 Nginx/Ingress 層把 query 轉成 header（或調整 Gateway 認證方式）。
+`Web client → Orchestrator → SGLang（LLM streaming）→ ws_gateway_tts（WS API v1）→ Web client 播放`
+
+功能：
+- 設定 Orchestrator URL / API key
+- 一鍵 connect / disconnect
+- 送出「使用者問題」後：即時顯示 LLM streaming 文本（`llm_delta`）
+- 同時播放 `audio_chunk`（raw PCM16；依 `docs/API.md` 的 v1 定義；也相容少數實作直接回整段 WAV）
+- 顯示 debug：`session_id`、`chunk_seq`、`unit_index` 範圍、TTFA、errors、tool_calls（僅顯示不做 TTS）
+
+> 注意：Browser 原生 WebSocket **無法**自訂 `Authorization` header。此 reference 會把 API key 附加到 URL query：`?api_key=...`。若你的部署要求 header 認證，請在 Nginx/Ingress 層注入。
 
 ---
 
 ## 1. 本機執行（最簡單）
 
-### 1.1 啟動 Gateway（dummy）
+### 1.1 啟動 ws_gateway_tts（dummy）
 
 在專案根目錄：
 
@@ -24,7 +28,37 @@ $env:WS_TTS_PORT="9000"
 ..\.venv\Scripts\python.exe -m ws_gateway_tts.server
 ```
 
-### 1.2 啟動靜態網站
+### 1.2 啟動 SGLang（Docker）
+
+在專案根目錄：
+
+```powershell
+cd sglang-server
+cp .env.example .env
+docker compose up -d
+```
+
+（確認可用）
+
+```powershell
+curl http://localhost:8082/v1/models
+```
+
+### 1.3 啟動 Orchestrator
+
+在專案根目錄：
+
+```powershell
+cd D:\._vscode2\detection_pose
+$env:SGLANG_BASE_URL="http://localhost:8082"
+$env:SGLANG_API_KEY="your-sglang-key"
+$env:WS_TTS_URL="ws://localhost:9000/tts"
+..\.venv\Scripts\python.exe -m orchestrator.server
+```
+
+預設 Orchestrator：`ws://localhost:9100/chat`
+
+### 1.4 啟動靜態網站
 
 在專案根目錄：
 
@@ -37,7 +71,7 @@ cd .\web_client
 打開瀏覽器：
 - `http://localhost:8000/`
 
-### 1.3 常見問題：瀏覽器顯示「Directory listing」
+### 1.5 常見問題：瀏覽器顯示「Directory listing」
 
 如果你看到的是 `.env`、`docker-compose.yml`、`nginx/` 之類的清單，代表你在錯的資料夾啟動了 `http.server`（通常是不小心在 `sglang-server/` 下面）。
 
@@ -56,24 +90,24 @@ cd D:\._vscode2\detection_pose\web_client
 
 ## 2. 操作方式
 
-1. `Gateway URL`：例如 `ws://localhost:9000/tts`
-2. `API Key`：可留空（會附加到 `?api_key=`）
-3. `Connect + Start`：會建立 WS 並立即送 `start`
-4. 在「輸入文字」貼上內容後按 `Send text_delta`
-   - `逐段`：一次送整段（單一 `text_delta`）
-   - `逐字`：每字一個 `text_delta`（用於逐字互動/除錯）
-5. 按 `Send text_end`：讓 server flush pending units，最後送 `tts_end` 並關閉連線
-6. `Send cancel`：中止並收到 `tts_end.cancelled=true`
+1. `Orchestrator URL`：例如 `ws://localhost:9100/chat`
+2. `API Key`：可留空（會附加到 `?api_key=`；若 Orchestrator 設定 `ORCH_API_KEY` 則需填入）
+3. `Connect`
+4. 在「輸入問題」貼上內容後按 `Send prompt`
+5. 你會看到：
+   - `LLM transcript` 逐段出現（streaming）
+   - 同時持續播放語音（`audio_chunk`）
+6. `Cancel`：中止（Orchestrator 會送 `cancel` 給 ws_gateway_tts；並嘗試回傳 `tts_end.cancelled=true`）
 
 ---
 
 ## 3. 連到 Docker 部署
 
-若你已把 Gateway 暴露為：
-- `wss://<host>/tts`（Nginx WS upgrade）
+若你已把 Orchestrator 暴露為：
+- `wss://<host>/chat`（Nginx WS upgrade）
 
 則在頁面上設定：
-- `Gateway URL`：`wss://<host>/tts`
+- `Orchestrator URL`：`wss://<host>/chat`
 - `API Key`：依部署需求填入
 
-若部署使用 Nginx，請確認 WS upgrade 已開啟（參考 `docs/DEPLOY.md` 的 Nginx 範例）。
+若部署使用 Nginx，請確認 WS upgrade 已開啟（可參考 `docs/DEPLOY.md` 的 Nginx 範例，將 `/chat` 也用同樣方式轉發）。

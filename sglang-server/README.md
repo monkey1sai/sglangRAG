@@ -52,6 +52,23 @@ $env:WS_TTS_PORT="9000"
 ..\.venv\Scripts\python.exe -m ws_gateway_tts.server
 ```
 
+> 若你接上喇叭只聽到「嘟」聲：這是 DummyTTS 的預期行為（固定音高），代表協定與播放鏈路正常，但尚未整合真實 TTS。
+
+### 啟動 WS Gateway（Piper：真實語音 / 開源可本地部署）
+
+Piper 是開源 TTS，適合做本地部署與商用（需自行下載模型與 piper CLI）。
+
+```powershell
+cd sglang-server
+$env:WS_TTS_ENGINE="piper"
+$env:PIPER_BIN="C:\\path\\to\\piper.exe"
+$env:PIPER_MODEL="C:\\path\\to\\zh\\model.onnx"
+$env:WS_TTS_PORT="9000"
+..\.venv\Scripts\python.exe -m ws_gateway_tts.server
+```
+
+> 提醒：Piper 模型有固定取樣率；例如 `zh_CN-huayan-medium` 是 `22050Hz`（看同資料夾的 `.onnx.json`）。若前端送 `sample_rate=16000`，Gateway 會報錯且聽不到聲音。
+
 健康檢查：
 
 ```powershell

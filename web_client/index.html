@@ -168,20 +168,20 @@
   </head>
   <body>
     <div class="wrap">
-      <h1>WD Gateway TTS Web Client Reference（WS API v1）</h1>
+      <h1>WD Orchestrator Web Client Reference（LLM → TTS, WS API v1）</h1>
       <div class="hint">
-        <div>此頁面只做最小可用與除錯，不追求 UI。訊息格式完全遵守 `docs/API.md` 的 WS API v1。</div>
+        <div>此頁面只做最小可用與除錯，不追求 UI。TTS 訊息格式完全遵守 `docs/API.md` 的 WS API v1。</div>
         <div>
-          Browser 原生 WebSocket 無法自訂 `Authorization` header；本工具會把 `API Key` 附加到 URL query
-         （例如 `?api_key=...`）。若你的 Gateway/Nginx 尚未支援此方式，請改由反向代理注入 header。
+          Browser 原生 WebSocket 無法自訂 `Authorization` header；本工具會把 `API Key` 附加到 URL query（例如
+          `?api_key=...`）。若你的部署要求 header 認證，請在 Nginx/Ingress 層注入。
         </div>
       </div>
 
       <div class="grid" style="margin-top: 14px">
         <div class="card">
           <div class="row">
-            <label>Gateway URL</label>
-            <input id="gatewayUrl" value="ws://localhost:9000/tts" />
+            <label>Orchestrator URL</label>
+            <input id="orchestratorUrl" value="ws://localhost:9100/chat" />
           </div>
           <div class="row">
             <label>API Key（可留空）</label>
@@ -203,6 +203,7 @@
               <label>sample_rate</label>
               <select id="sampleRate">
                 <option value="16000" selected>16000</option>
+                <option value="22050">22050</option>
                 <option value="24000">24000</option>
                 <option value="48000">48000</option>
               </select>
@@ -217,17 +218,11 @@
                 <option value="2">2</option>
               </select>
             </div>
-            <div class="row" style="grid-template-columns: 160px 1fr">
-              <label>text_delta 模式</label>
-              <select id="sendMode">
-                <option value="chunk" selected>逐段（一次送完整段）</option>
-                <option value="char">逐字（每字一個 text_delta）</option>
-              </select>
-            </div>
+            <div></div>
           </div>
 
           <div class="btns">
-            <button class="primary" id="btnConnect">Connect + Start</button>
+            <button class="primary" id="btnConnect">Connect</button>
             <button class="danger" id="btnDisconnect" disabled>Disconnect</button>
             <span class="pill" title="WebSocket 連線狀態">
               <span id="connDot" class="dot"></span>
@@ -236,21 +231,19 @@
           </div>
 
           <div class="row" style="grid-template-columns: 160px 1fr; margin-top: 14px">
-            <label>輸入文字</label>
-            <textarea id="inputText" placeholder="輸入文字後按 Send text_delta。"></textarea>
+            <label>輸入問題</label>
+            <textarea id="inputText" placeholder="輸入問題後按 Send prompt（會串流顯示文字，並同步產音播放）。"></textarea>
           </div>
 
           <div class="btns">
-            <button class="primary" id="btnSendDelta" disabled>Send text_delta</button>
-            <button id="btnTextEnd" disabled>Send text_end</button>
-            <button class="danger" id="btnCancel" disabled>Send cancel</button>
+            <button class="primary" id="btnSendPrompt" disabled>Send prompt</button>
+            <button class="danger" id="btnCancel" disabled>Cancel</button>
             <button id="btnClearLog">Clear log</button>
           </div>
 
           <div class="hint" style="margin-top: 10px">
             <div>
-              播放策略：使用 WebAudio 播放 `audio_chunk.audio_base64`（raw PCM16 little-endian）。`wav_header_base64`
-              僅用於除錯顯示/驗證格式。
+              播放策略：使用 WebAudio 播放 `audio_chunk.audio_base64`（raw PCM16 little-endian）。`wav_header_base64` 僅用於除錯顯示/驗證格式。
             </div>
             <div class="warn">注意：若 chunk 產生粒度較大或標點密度低，UnitLatency 可能出現長尾（屬正常現象）。</div>
           </div>
@@ -260,7 +253,7 @@
           <div class="kvs">
             <div class="k">session_id</div>
             <div id="dbgSessionId">-</div>
-            <div class="k">seq（client）</div>
+            <div class="k">seq（tts）</div>
             <div id="dbgSeq">-</div>
             <div class="k">TTFA</div>
             <div id="dbgTtfa">-</div>
@@ -277,6 +270,10 @@
             <div>
               <div class="hint" style="margin-bottom: 6px">Last start_ack</div>
               <pre id="preStartAck">(none)</pre>
+            </div>
+            <div>
+              <div class="hint" style="margin-bottom: 6px">LLM transcript</div>
+              <pre id="preLlm"></pre>
             </div>
             <div>
               <div class="hint" style="margin-bottom: 6px">Event log</div>
@@ -412,6 +409,13 @@
           this.started = true;
         }
 
+        async resume() {
+          if (!this.ctx) return;
+          if (this.ctx.state === "suspended") {
+            await this.ctx.resume();
+          }
+        }
+
         reset() {
           if (this.ctx) {
             try {
@@ -459,12 +463,12 @@
       const audioPlayer = new AudioPlayer();
 
       let ws = null;
-      let clientSeq = 1;
       let sessionId = randomUuidV4();
       let startSentAtMs = null;
       let ttfaMs = null;
       let chunksReceived = 0;
       let errorsReceived = 0;
+      let lastTtsSeq = null;
 
       function setConnState(state) {
         $("connText").textContent = state;
@@ -477,10 +481,9 @@
       function setUiConnected(connected) {
         $("btnConnect").disabled = connected;
         $("btnDisconnect").disabled = !connected;
-        $("btnSendDelta").disabled = !connected;
-        $("btnTextEnd").disabled = !connected;
+        $("btnSendPrompt").disabled = !connected;
         $("btnCancel").disabled = !connected;
-        $("gatewayUrl").disabled = connected;
+        $("orchestratorUrl").disabled = connected;
         $("apiKey").disabled = connected;
         $("sessionId").disabled = connected;
         $("audioFormat").disabled = connected;
@@ -490,7 +493,7 @@
 
       function updateDebug() {
         $("dbgSessionId").textContent = sessionId || "-";
-        $("dbgSeq").textContent = String(clientSeq);
+        $("dbgSeq").textContent = lastTtsSeq == null ? "-" : String(lastTtsSeq);
         $("dbgTtfa").textContent = ttfaMs == null ? "-" : `${ttfaMs.toFixed(0)} ms`;
         $("dbgChunks").textContent = String(chunksReceived);
         $("dbgErrors").textContent = String(errorsReceived);
@@ -502,35 +505,18 @@
         log("→ send", obj);
       }
 
-      function buildStartMessage() {
-        return {
-          type: "start",
-          session_id: sessionId,
-          audio_format: $("audioFormat").value,
-          sample_rate: Number($("sampleRate").value),
-          channels: Number($("channels").value),
-        };
-      }
-
-      function buildTextDelta(text) {
-        return { type: "text_delta", session_id: sessionId, seq: clientSeq++, text };
-      }
-
-      function buildTextEnd() {
-        return { type: "text_end", session_id: sessionId, seq: clientSeq++ };
-      }
-
       function buildCancel() {
-        return { type: "cancel", session_id: sessionId, seq: clientSeq++ };
+        return { type: "cancel" };
       }
 
       function resetSessionState() {
-        clientSeq = 1;
         startSentAtMs = null;
         ttfaMs = null;
         chunksReceived = 0;
         errorsReceived = 0;
+        lastTtsSeq = null;
         $("preStartAck").textContent = "(none)";
+        $("preLlm").textContent = "";
         updateDebug();
         audioPlayer.reset();
       }
@@ -550,8 +536,11 @@
         try {
           applySessionIdFromUi();
           resetSessionState();
+          // Autoplay policy: 建議在「使用者手勢」內建立並 resume AudioContext，避免後續 onmessage 才建立導致無聲。
+          audioPlayer.ensure(Number($("sampleRate").value));
+          await audioPlayer.resume();
 
-          const url = buildWsUrl($("gatewayUrl").value.trim(), $("apiKey").value.trim());
+          const url = buildWsUrl($("orchestratorUrl").value.trim(), $("apiKey").value.trim());
           ws = new WebSocket(url);
           setConnState("CONNECTING");
           setUiConnected(true);
@@ -559,12 +548,6 @@
 
           ws.onopen = () => {
             setConnState("CONNECTED");
-            try {
-              startSentAtMs = nowMs();
-              wsSend(buildStartMessage());
-            } catch (e) {
-              log(`start failed: ${String(e)}`);
-            }
             updateDebug();
           };
 
@@ -578,13 +561,33 @@
             }
             log("← recv", msg);
 
+            if (msg.type === "orchestrator_start") {
+              return;
+            }
+
+            if (msg.type === "llm_delta") {
+              $("preLlm").textContent += msg.delta || "";
+              return;
+            }
+
+            if (msg.type === "tool_calls_delta") {
+              return;
+            }
+
+            if (msg.type === "llm_done") {
+              return;
+            }
+
             if (msg.type === "start_ack") {
               $("preStartAck").textContent = safeJson(msg);
+              if (typeof msg.seq === "number") lastTtsSeq = msg.seq;
+              updateDebug();
               return;
             }
 
             if (msg.type === "audio_chunk") {
               chunksReceived++;
+              if (typeof msg.seq === "number") lastTtsSeq = msg.seq;
               $("dbgChunkSeq").textContent = String(msg.chunk_seq ?? "-");
               $("dbgUnitRange").textContent = `${msg.unit_index_start ?? "-"}..${msg.unit_index_end ?? "-"}`;
 
@@ -619,13 +622,25 @@
 
             if (msg.type === "tts_end") {
               log("tts_end received; server will close");
+              if (typeof msg.seq === "number") lastTtsSeq = msg.seq;
               updateDebug();
               return;
             }
 
             if (msg.type === "error") {
               errorsReceived++;
+              if (typeof msg.seq === "number") lastTtsSeq = msg.seq;
               updateDebug();
+              return;
+            }
+
+            if (msg.type === "orchestrator_error") {
+              errorsReceived++;
+              updateDebug();
+              return;
+            }
+
+            if (msg.type === "orchestrator_cancelled") {
               return;
             }
           };
@@ -654,31 +669,24 @@
         } catch {}
       });
 
-      $("btnSendDelta").addEventListener("click", async () => {
-        const text = $("inputText").value;
-        if (!text) return;
+      $("btnSendPrompt").addEventListener("click", async () => {
+        const prompt = $("inputText").value;
+        if (!prompt) return;
         try {
-          const mode = $("sendMode").value;
-          if (mode === "chunk") {
-            wsSend(buildTextDelta(text));
-          } else {
-            for (const ch of Array.from(text)) {
-              wsSend(buildTextDelta(ch));
-              await new Promise((r) => setTimeout(r, 0));
-            }
-          }
+          resetSessionState();
+          audioPlayer.ensure(Number($("sampleRate").value));
+          await audioPlayer.resume();
+          startSentAtMs = nowMs();
+          wsSend({
+            prompt,
+            session_id: sessionId,
+            audio_format: $("audioFormat").value,
+            sample_rate: Number($("sampleRate").value),
+            channels: Number($("channels").value),
+          });
           updateDebug();
         } catch (e) {
-          log(`send text_delta failed: ${String(e)}`);
-        }
-      });
-
-      $("btnTextEnd").addEventListener("click", () => {
-        try {
-          wsSend(buildTextEnd());
-          updateDebug();
-        } catch (e) {
-          log(`send text_end failed: ${String(e)}`);
+          log(`send prompt failed: ${String(e)}`);
         }
       });
 

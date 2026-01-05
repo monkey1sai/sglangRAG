@@ -26,8 +26,20 @@
 |---|---:|---|
 | `WS_TTS_HOST` | `0.0.0.0` | Gateway 綁定位址 |
 | `WS_TTS_PORT` | `9000` | Gateway 對外 port |
-| `WS_TTS_ENGINE` | `dummy` | `dummy` / `riva` |
+| `WS_TTS_ENGINE` | `dummy` | `dummy` / `piper` / `riva` |
 | `RIVA_SERVER` | `localhost:50051` | 使用 `riva` engine 時的 gRPC 位址 |
+
+### Piper（真實語音 / 開源可本地部署）
+
+> Piper 需要你自行提供 piper CLI 與模型檔（.onnx）；本專案只提供 adapter。
+
+| env var | 預設 | 說明 |
+|---|---:|---|
+| `PIPER_BIN` | (必填) | `piper` 可執行檔路徑 |
+| `PIPER_MODEL` | (必填) | Piper 模型 `.onnx` 路徑 |
+| `PIPER_SPEAKER_ID` | (空) | 多說話人模型用 |
+| `PIPER_EXTRA_ARGS` | (空) | 直接追加到 piper CLI 的參數（進階） |
+| `PIPER_OUTPUT_MODE` | `file` | `file`（較穩）或 `stdout`（若你的 piper 支援 `--output_file -`） |
 
 建議（產品化）：
 - `GATEWAY_API_KEY`（或 JWT 設定）用於 WS 認證
@@ -128,4 +140,3 @@ server {
 - Browser/benchmark 可連上 `ws://localhost:9000/tts`
 - Nginx 轉發後可連上 `wss://<host>/tts`（WS upgrade 正常）
 - 服務重啟後可自動恢復（`restart: unless-stopped` 或 systemd）
-

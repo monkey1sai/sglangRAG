@@ -21,6 +21,7 @@ from .protocol import (
 from .session import SessionManager
 from .tts_engines.base import AudioSpec
 from .tts_engines.dummy import DummyTtsEngine
+from .tts_engines.piper import PiperTtsEngine
 from .tts_engines.riva import RivaTtsEngine
 
 
@@ -171,17 +172,19 @@ def build_wav_header(*, sample_rate: int, channels: int) -> bytes:
 def build_engine() -> Any:
     engine_name = os.getenv("WS_TTS_ENGINE", "dummy").lower().strip()
     if engine_name == "dummy":
-        return DummyTtsEngine()
+        return engine_name, DummyTtsEngine()
+    if engine_name == "piper":
+        return engine_name, PiperTtsEngine.from_env()
     if engine_name == "riva":
         server = os.getenv("RIVA_SERVER", "localhost:50051")
-        return RivaTtsEngine(server=server)
+        return engine_name, RivaTtsEngine(server=server)
     raise ValueError(f"未知 WS_TTS_ENGINE: {engine_name}")
 
 
 class GatewayApp:
     def __init__(self) -> None:
         self.started_at_utc = dt.datetime.now(dt.timezone.utc)
-        self.engine = build_engine()
+        self.engine_name, self.engine = build_engine()
         self.sessions = SessionManager(self.engine)
         self._cleanup_task: Optional[asyncio.Task[None]] = None
         self.metrics = Metrics()
@@ -204,6 +207,7 @@ class GatewayApp:
             {
                 "status": "ok",
                 "engine": os.getenv("WS_TTS_ENGINE", "dummy"),
+                "engine_resolved": self.engine_name,
                 "version": os.getenv("WS_TTS_VERSION", "dev"),
                 "started_at": self.started_at_utc.isoformat(),
                 "uptime_s": uptime_s,

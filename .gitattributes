@@ -1,0 +1,7 @@
+# Git LFS (large binaries / models)
+*.onnx filter=lfs diff=lfs merge=lfs -text
+*.pt filter=lfs diff=lfs merge=lfs -text
+*.bin filter=lfs diff=lfs merge=lfs -text
+
+# Optional: track audio assets via LFS (enable when needed)
+*.wav filter=lfs diff=lfs merge=lfs -text

@@ -13,6 +13,11 @@ env/
 dist/
 build/
 
+# Env (secrets)
+.env
+.env.*
+!.env.example
+
 # IDEs
 .vscode/
 .idea/
@@ -24,6 +29,24 @@ build/
 Thumbs.db
 desktop.ini
 
+# Logs / outputs
+logs/*.json
+*.log
+
+# Audio artifacts
+*.wav
+*.pcm
+*.mp3
+audio_outputs/**
+!audio_outputs/.gitignore
+
+# Models (never commit)
+models/**
+!models/.gitignore
+
+# Local vendor binaries (keep public repo clean)
+piper/
+
 # vLLM Server - Runtime files
 vllm-server/models/
 vllm-server/logs/
@@ -31,7 +54,7 @@ vllm-server/certs/
 vllm-server/.env
 
 # Docker
-*.log
+# (handled above)
 
 # Temp files
 *.tmp
