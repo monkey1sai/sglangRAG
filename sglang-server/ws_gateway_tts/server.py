@@ -170,7 +170,7 @@ def build_wav_header(*, sample_rate: int, channels: int) -> bytes:
 
 
 def build_engine() -> Any:
-    engine_name = os.getenv("WS_TTS_ENGINE", "dummy").lower().strip()
+    engine_name = os.getenv("WS_TTS_ENGINE", "piper").lower().strip()
     if engine_name == "dummy":
         return engine_name, DummyTtsEngine()
     if engine_name == "piper":
@@ -203,14 +203,18 @@ class GatewayApp:
     async def healthz(self, request: web.Request) -> web.Response:
         now = dt.datetime.now(dt.timezone.utc)
         uptime_s = (now - self.started_at_utc).total_seconds()
+        from .piper_bootstrap import get_piper_health_fields
+
+        piper_fields = get_piper_health_fields()
         return web.json_response(
             {
                 "status": "ok",
-                "engine": os.getenv("WS_TTS_ENGINE", "dummy"),
+                "engine": os.getenv("WS_TTS_ENGINE", "piper"),
                 "engine_resolved": self.engine_name,
                 "version": os.getenv("WS_TTS_VERSION", "dev"),
                 "started_at": self.started_at_utc.isoformat(),
                 "uptime_s": uptime_s,
+                **piper_fields,
             }
         )
 

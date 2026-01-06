@@ -30,6 +30,23 @@ cp .env.example .env
 docker compose up -d
 ```
 
+> Compose 會一併啟動：
+> - `sglang`：`http://<HOST_IP>:8082/`
+> - `ws_gateway_tts`：健康檢查 `http://<HOST_IP>:9000/healthz`
+> - `orchestrator`：健康檢查 `http://<HOST_IP>:9100/healthz`，WS `ws://<HOST_IP>:9100/chat`
+> - `web`：`http://<HOST_IP>:8080/`（同網域反代：`/api`、`/tts`、`/chat`）
+>
+> 備註：SGLang 的 `/health` 預期回 `200` 且 body 為空；可用 `curl -i http://localhost:8082/health` 查看狀態碼與 headers。
+
+### 遠端 client 直連 SGLang（需帶 SGLANG_API_KEY）
+
+```powershell
+curl http://<HOST_IP>:8082/v1/chat/completions `
+  -H "Authorization: Bearer <SGLANG_API_KEY>" `
+  -H "Content-Type: application/json" `
+  -d '{\"model\":\"Qwen/Qwen2.5-1.5B-Instruct\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}],\"stream\":false}'
+```
+
 ### 3. 執行壓力測試
 
 ```powershell
@@ -41,39 +58,45 @@ docker compose up -d
 
 此專案可搭配「WS Gateway（對外 WebSocket）」+「Riva TTS（內部 gRPC）」做即時語音串流。
 
-### 啟動 WS Gateway（MVP）
+### WS Gateway（預設：Piper 真實語音）
 
-預設先用 `DummyTtsEngine`（會產生可播放音訊，但不是真實語音），用來驗證逐字對齊 / cancel / resume / 背壓流程。
+`docker compose up -d --build` 預設會啟用 `Piper`（真實語音）。第一次啟動會自動下載 Piper binary 與預設模型到 Docker named volume（屬正常現象，可能需要幾分鐘）。
 
-```powershell
-cd sglang-server
-$env:WS_TTS_ENGINE="dummy"
-$env:WS_TTS_PORT="9000"
-..\.venv\Scripts\python.exe -m ws_gateway_tts.server
-```
-
-> 若你接上喇叭只聽到「嘟」聲：這是 DummyTTS 的預期行為（固定音高），代表協定與播放鏈路正常，但尚未整合真實 TTS。
-
-### 啟動 WS Gateway（Piper：真實語音 / 開源可本地部署）
-
-Piper 是開源 TTS，適合做本地部署與商用（需自行下載模型與 piper CLI）。
-
-```powershell
-cd sglang-server
-$env:WS_TTS_ENGINE="piper"
-$env:PIPER_BIN="C:\\path\\to\\piper.exe"
-$env:PIPER_MODEL="C:\\path\\to\\zh\\model.onnx"
-$env:WS_TTS_PORT="9000"
-..\.venv\Scripts\python.exe -m ws_gateway_tts.server
-```
-
-> 提醒：Piper 模型有固定取樣率；例如 `zh_CN-huayan-medium` 是 `22050Hz`（看同資料夾的 `.onnx.json`）。若前端送 `sample_rate=16000`，Gateway 會報錯且聽不到聲音。
+> 若你仍聽到「嘟」聲：通常代表 `WS_TTS_ENGINE` 還是 `dummy`，或 Piper 未成功下載/啟動（請看下方驗收與 logs）。
 
 健康檢查：
 
 ```powershell
 curl http://localhost:9000/healthz
 ```
+
+（驗收：確認已切到 piper）
+
+```powershell
+# engine_resolved 應該是 "piper"（不是 "dummy"）
+curl http://localhost:9000/healthz
+docker compose logs -f ws_gateway_tts
+```
+
+更換 Piper 模型（進階）：
+- 方式 A（最簡單）：清空 volume 後重啟（會重新下載預設模型）
+  - `docker volume rm sglang_piper-data`（或用 `docker volume ls` 找出實際名稱）
+- 方式 B：在 `sglang-server/.env` 改 `PIPER_MODEL` 與對應的 `PIPER_MODEL_ONNX_URL / PIPER_MODEL_ONNX_SHA256 / PIPER_MODEL_JSON_URL / PIPER_MODEL_JSON_SHA256`，重啟 `ws_gateway_tts`
+
+### WS Gateway（切回 Dummy：除錯用）
+
+若你只想驗證協定/鏈路（不需要真實語音），可切回 `DummyTtsEngine`：
+
+```powershell
+# sglang-server/.env
+WS_TTS_ENGINE=dummy
+
+docker compose up -d --build ws_gateway_tts
+```
+
+> 提醒：Piper 模型有固定取樣率；例如 `zh_CN-huayan-medium` 是 `22050Hz`（看同資料夾的 `.onnx.json`）。若前端送 `sample_rate=16000`，Gateway 會報錯且聽不到聲音。
+
+> 若你需要本機直接啟動（開發/除錯）：仍可用 `..\\.venv\\Scripts\\python.exe -m ws_gateway_tts.server`。
 
 ### 基本壓測（50 連線、每秒 5 字、10 分鐘）
 

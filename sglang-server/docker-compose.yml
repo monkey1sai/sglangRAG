@@ -35,8 +35,129 @@ services:
               capabilities: [gpu]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:30000/health"]
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:30000/health').read(); print('ok')",
+        ]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 60s
+
+  # ===========================================
+  # WebSocket TTS Gateway (Piper by default; first boot auto-download)
+  # ===========================================
+  ws_gateway_tts:
+    build:
+      context: ..
+      dockerfile: docker/ws_gateway_tts.Dockerfile
+    container_name: ws-gateway-tts
+    environment:
+      - WS_TTS_HOST=0.0.0.0
+      - WS_TTS_PORT=9000
+      - WS_TTS_ENGINE=${WS_TTS_ENGINE:-piper}
+      # Piper (default; first boot auto-download into named volume)
+      - PIPER_ROOT=/opt/piper
+      - PIPER_BIN=${PIPER_BIN:-/opt/piper/piper}
+      - PIPER_MODEL=${PIPER_MODEL:-/opt/piper/models/zh_CN-huayan-medium.onnx}
+      - PIPER_RELEASE_TAG=2023.11.14-2
+      - PIPER_TARBALL_URL=https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_x86_64.tar.gz
+      - PIPER_TARBALL_SHA256=A50CB45F355B7AF1F6D758C1B360717877BA0A398CC8CBE6D2A7A3A26E225992
+      - PIPER_DEFAULT_MODEL_NAME=zh_CN-huayan-medium
+      - PIPER_MODEL_ONNX_URL=https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx
+      - PIPER_MODEL_ONNX_SHA256=9929917BF8CABB26FD528EA44D3A6699C11E87317A14765312420BE230BE0F3D
+      - PIPER_MODEL_JSON_URL=https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx.json
+      - PIPER_MODEL_JSON_SHA256=D521DC45504A8CCC99E325822B35946DD701840BFB07E3DBB31A40929ED6A82B
+      - PIPER_SPEAKER_ID=${PIPER_SPEAKER_ID:-}
+      - PIPER_EXTRA_ARGS=${PIPER_EXTRA_ARGS:-}
+      - PIPER_OUTPUT_MODE=${PIPER_OUTPUT_MODE:-file}
+      # Riva (optional)
+      - RIVA_SERVER=${RIVA_SERVER:-localhost:50051}
+    volumes:
+      - piper-data:/opt/piper
+    ports:
+      - "9000:9000"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:9000/healthz').read(); print('ok')",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # ===========================================
+  # Orchestrator (Web client ↔ SGLang ↔ ws_gateway_tts)
+  # ===========================================
+  orchestrator:
+    build:
+      context: ..
+      dockerfile: docker/orchestrator.Dockerfile
+    container_name: orchestrator
+    depends_on:
+      sglang:
+        condition: service_healthy
+      ws_gateway_tts:
+        condition: service_healthy
+    environment:
+      - ORCH_HOST=0.0.0.0
+      - ORCH_PORT=9100
+      - ORCH_API_KEY=${ORCH_API_KEY:-}
+      - SGLANG_BASE_URL=http://sglang:30000
+      - SGLANG_API_KEY=${SGLANG_API_KEY}
+      - WS_TTS_URL=ws://ws_gateway_tts:9000/tts
+      - WS_TTS_API_KEY=${WS_TTS_API_KEY:-}
+      - TTS_FLUSH_MIN_CHARS=${TTS_FLUSH_MIN_CHARS:-12}
+      - TTS_FLUSH_ON_PUNCT=${TTS_FLUSH_ON_PUNCT:-true}
+      - ALLOW_CLIENT_TTS_URL=${ALLOW_CLIENT_TTS_URL:-false}
+    ports:
+      - "9100:9100"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:9100/healthz').read(); print('ok')",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # ===========================================
+  # Web client (static) + reverse proxy (same origin)
+  # ===========================================
+  web:
+    build:
+      context: ..
+      dockerfile: docker/web.Dockerfile
+    container_name: web
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+      ws_gateway_tts:
+        condition: service_healthy
+      sglang:
+        condition: service_healthy
+    ports:
+      - "8080:80"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/healthz"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  piper-data:

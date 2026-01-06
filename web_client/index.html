@@ -181,7 +181,7 @@
         <div class="card">
           <div class="row">
             <label>Orchestrator URL</label>
-            <input id="orchestratorUrl" value="ws://localhost:9100/chat" />
+            <input id="orchestratorUrl" value="" placeholder="預設：ws(s)://<host>/chat" />
           </div>
           <div class="row">
             <label>API Key（可留空）</label>
@@ -320,6 +320,29 @@
         } catch {
           const sep = baseUrl.includes("?") ? "&" : "?";
           return `${baseUrl}${sep}api_key=${encodeURIComponent(apiKey)}`;
+        }
+      }
+
+      function defaultOrchestratorWsUrl() {
+        const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
+        return `${wsProto}//${window.location.host}/chat`;
+      }
+
+      async function tryAutoPickSampleRate() {
+        try {
+          const resp = await fetch("/tts/healthz", { cache: "no-store" });
+          if (!resp.ok) return;
+          const obj = await resp.json();
+          const sr = obj?.model_sample_rate;
+          if (typeof sr !== "number") return;
+          const select = $("sampleRate");
+          const has = Array.from(select.options).some((o) => Number(o.value) === sr);
+          if (has) {
+            select.value = String(sr);
+            log(`auto sample_rate from /tts/healthz: ${sr}`);
+          }
+        } catch {
+          // ignore
         }
       }
 
@@ -700,6 +723,10 @@
       });
 
       // init
+      if (!$("orchestratorUrl").value.trim()) {
+        $("orchestratorUrl").value = defaultOrchestratorWsUrl();
+      }
+      tryAutoPickSampleRate();
       $("sessionId").value = sessionId;
       updateDebug();
       setConnState("DISCONNECTED");

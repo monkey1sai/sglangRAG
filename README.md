@@ -26,51 +26,64 @@
 ```powershell
 cd .\sglang-server
 cp .env.example .env
-docker compose up -d
+docker compose up -d --build
 ```
 
-### 2) 啟動 ws_gateway_tts（先用 dummy）
-
-```powershell
-cd .\sglang-server
-$env:WS_TTS_ENGINE="dummy"
-$env:WS_TTS_PORT="9000"
-..\.venv\Scripts\python.exe -m ws_gateway_tts.server
-```
+> `docker compose up -d` 會一併啟動：`ws_gateway_tts`（預設 dummy）、`orchestrator`、`web`（Nginx 靜態站 + 反代）。
 
 健康檢查：
 
 ```powershell
+curl http://localhost:8082/health
 curl http://localhost:9000/healthz
+curl http://localhost:9100/healthz
 ```
 
-### 3) 啟動 Orchestrator
+> 備註：SGLang 的 `/health` 預期回 `200` 且 body 為空；可用 `curl -i http://localhost:8082/health` 查看狀態碼與 headers。
 
-```powershell
-cd D:\._vscode2\detection_pose
-$env:SGLANG_BASE_URL="http://localhost:8082"
-$env:SGLANG_API_KEY="your-sglang-key"
-$env:WS_TTS_URL="ws://localhost:9000/tts"
-..\.venv\Scripts\python.exe -m orchestrator.server
-```
+### 2) 啟動 Web client
 
-### 4) 啟動 Web client
+打開：`http://localhost:8080/`（或 `http://<HOST_IP>:8080/`）
+
+同網域路徑（避免 CORS）：
+- `ws://<HOST_IP>:8080/chat` → Orchestrator WebSocket
+- `http://<HOST_IP>:8080/api/v1/...` → SGLang API
+- `ws://<HOST_IP>:8080/tts` → ws_gateway_tts WebSocket
+
+（dev 模式）若你想用本機靜態 server：
 
 ```powershell
 cd .\web_client
 ..\.venv\Scripts\python.exe -m http.server 8000
 ```
 
-打開 `http://localhost:8000/`，Orchestrator URL 預設填 `ws://localhost:9100/chat`。
+---
+
+## 遠端連線（外部機器）
+
+### 1) 直連 SGLang（需帶 `SGLANG_API_KEY`）
+
+```powershell
+# 注意：Content-Type 必須是「application/json」（不可被換行切斷成 application/ json）
+$apiKey = "<SGLANG_API_KEY>"
+$body = '{"model":"Qwen/Qwen2.5-1.5B-Instruct","messages":[{"role":"user","content":"你好"}],"stream":false}'
+curl.exe http://<HOST_IP>:8082/v1/chat/completions -H "Authorization: Bearer $apiKey" -H "Content-Type: application/json" -d $body
+```
+
+（同網域反代）也可改打：`http://<HOST_IP>:8080/api/v1/chat/completions`
 
 ---
 
 ## Dummy vs Piper
 
+- 預設：`WS_TTS_ENGINE=piper`（真實語音）。第一次啟動會自動下載 Piper binary + 預設模型到 Docker named volume（正常現象）。
 - `WS_TTS_ENGINE=dummy`：只會回「可播放音訊」，但不是語音（固定音高的「嘟」聲），用於驗證整條串流鏈路。
-- `WS_TTS_ENGINE=piper`：真實語音，需提供：
-  - `PIPER_BIN`：`piper.exe` 路徑
-  - `PIPER_MODEL`：模型 `.onnx` 路徑
+
+更換/重置 Piper 模型（最簡單）：`docker volume rm sglang_piper-data` 後再 `docker compose up -d --build`
+
+驗收（確認不是 dummy）：
+- `curl http://localhost:9000/healthz` 的 `engine_resolved` 應該是 `piper`
+- 若仍是 `dummy`：代表 `sglang-server/.env` 仍是 `WS_TTS_ENGINE=dummy` 或容器未重啟
 
 ---
 

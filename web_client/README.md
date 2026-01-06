@@ -17,59 +17,47 @@
 
 ## 1. 本機執行（最簡單）
 
-### 1.1 啟動 ws_gateway_tts（dummy）
-
-在專案根目錄：
-
-```powershell
-cd sglang-server
-$env:WS_TTS_ENGINE="dummy"
-$env:WS_TTS_PORT="9000"
-..\.venv\Scripts\python.exe -m ws_gateway_tts.server
-```
-
-### 1.2 啟動 SGLang（Docker）
+### 1.1 一鍵啟動（Docker Compose）
 
 在專案根目錄：
 
 ```powershell
 cd sglang-server
 cp .env.example .env
-docker compose up -d
+docker compose up -d --build
 ```
+
+打開瀏覽器：
+- `http://localhost:8080/`（或 `http://<HOST_IP>:8080/`）
+
+預設 Orchestrator URL：`ws(s)://<host>/chat`
+
+同網域路徑（避免 CORS）：
+- `/chat` → Orchestrator WebSocket
+- `/api/v1/...` → SGLang API
+- `/tts` → ws_gateway_tts WebSocket
+
+> 取樣率提醒：預設 Piper 模型 `zh_CN-huayan-medium` 通常是 `22050Hz`；頁面會嘗試從 `/tts/healthz` 自動帶入 `model_sample_rate`。
 
 （確認可用）
 
 ```powershell
-curl http://localhost:8082/v1/models
+curl http://localhost:8080/api/v1/models
 ```
 
-### 1.3 啟動 Orchestrator
+### 1.2 dev 模式（可選）
 
-在專案根目錄：
-
-```powershell
-cd D:\._vscode2\detection_pose
-$env:SGLANG_BASE_URL="http://localhost:8082"
-$env:SGLANG_API_KEY="your-sglang-key"
-$env:WS_TTS_URL="ws://localhost:9000/tts"
-..\.venv\Scripts\python.exe -m orchestrator.server
-```
-
-預設 Orchestrator：`ws://localhost:9100/chat`
-
-### 1.4 啟動靜態網站
-
-在專案根目錄：
+你也可以不用 compose 的 `web` 服務，改用本機靜態 server：
 
 ```powershell
-cd D:\._vscode2\detection_pose
 cd .\web_client
 ..\.venv\Scripts\python.exe -m http.server 8000
 ```
 
 打開瀏覽器：
 - `http://localhost:8000/`
+
+並在頁面上把 Orchestrator URL 設為 `ws://localhost:9100/chat`（compose 已對外 publish 9100）。
 
 ### 1.5 常見問題：瀏覽器顯示「Directory listing」
 

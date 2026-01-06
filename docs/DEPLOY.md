@@ -26,17 +26,27 @@
 |---|---:|---|
 | `WS_TTS_HOST` | `0.0.0.0` | Gateway 綁定位址 |
 | `WS_TTS_PORT` | `9000` | Gateway 對外 port |
-| `WS_TTS_ENGINE` | `dummy` | `dummy` / `piper` / `riva` |
+| `WS_TTS_ENGINE` | `piper` | `dummy` / `piper` / `riva` |
 | `RIVA_SERVER` | `localhost:50051` | 使用 `riva` engine 時的 gRPC 位址 |
 
 ### Piper（真實語音 / 開源可本地部署）
 
-> Piper 需要你自行提供 piper CLI 與模型檔（.onnx）；本專案只提供 adapter。
+本專案預設採「named volume + 自動下載」：
+- Piper binary / 模型 **不 bake 進 image**
+- 第一次啟動容器會自動下載到 Docker named volume（例如 `/opt/piper`），之後重啟不會重複下載
 
 | env var | 預設 | 說明 |
 |---|---:|---|
-| `PIPER_BIN` | (必填) | `piper` 可執行檔路徑 |
-| `PIPER_MODEL` | (必填) | Piper 模型 `.onnx` 路徑 |
+| `PIPER_ROOT` | `/opt/piper` | Piper 下載/安裝根目錄（建議掛載到 named volume） |
+| `PIPER_BIN` | `/opt/piper/piper` | Piper CLI 路徑 |
+| `PIPER_MODEL` | `/opt/piper/models/zh_CN-huayan-medium.onnx` | 預設模型 |
+| `PIPER_RELEASE_TAG` | 固定版本 | Piper release tag（固定，不用 latest） |
+| `PIPER_TARBALL_URL` | 固定 URL | Piper tarball 下載網址 |
+| `PIPER_TARBALL_SHA256` | 固定 SHA256 | tarball 校驗 |
+| `PIPER_MODEL_ONNX_URL` | 固定 URL | 預設模型下載網址 |
+| `PIPER_MODEL_ONNX_SHA256` | 固定 SHA256 | 模型校驗 |
+| `PIPER_MODEL_JSON_URL` | 固定 URL | `.onnx.json` 下載網址 |
+| `PIPER_MODEL_JSON_SHA256` | 固定 SHA256 | `.onnx.json` 校驗 |
 | `PIPER_SPEAKER_ID` | (空) | 多說話人模型用 |
 | `PIPER_EXTRA_ARGS` | (空) | 直接追加到 piper CLI 的參數（進階） |
 | `PIPER_OUTPUT_MODE` | `file` | `file`（較穩）或 `stdout`（若你的 piper 支援 `--output_file -`） |
@@ -49,27 +59,30 @@
 
 ## 3. Docker Compose（最小形態）
 
-> 說明：此 compose 目的在於「把 Gateway 服務化並固定 ports」，方便商業部署；SGLang 仍可使用既有 compose。
+> 建議直接使用本 repo 的 `sglang-server/docker-compose.yml`（已包含 named volume + 自動下載 Piper）。
 
-範例 `docker-compose.gateway.yml`（示意，可直接拷貝使用）：
+若你只想單獨部署 ws_gateway_tts，可參考以下示意（重點：named volume 掛載到 `/opt/piper`）：
 
 ```yaml
 services:
   ws-gateway-tts:
     image: python:3.11-slim
-    working_dir: /app/sglang-server
-    volumes:
-      - ./:/app
     environment:
       - WS_TTS_HOST=0.0.0.0
       - WS_TTS_PORT=9000
-      - WS_TTS_ENGINE=dummy
-      # - WS_TTS_ENGINE=riva
-      # - RIVA_SERVER=riva:50051
-    command: ["python", "-m", "ws_gateway_tts.server"]
+      - WS_TTS_ENGINE=piper
+      - PIPER_ROOT=/opt/piper
+      - PIPER_BIN=/opt/piper/piper
+      - PIPER_MODEL=/opt/piper/models/zh_CN-huayan-medium.onnx
+      # 其餘固定版本 URL/SHA256 請參考 repo 的 compose
+    volumes:
+      - piper-data:/opt/piper
     ports:
       - "9000:9000"
     restart: unless-stopped
+
+volumes:
+  piper-data:
 ```
 
 啟動：
