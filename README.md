@@ -1,121 +1,154 @@
-# WD 即時語音 AI Gateway（WebSocket + LLM + Streaming TTS）
+# Repo Root Entry
 
-此專案提供一套「工程可落地」的端到端串流鏈路：
-
-`Web client → Orchestrator → SGLang（LLM streaming）→ ws_gateway_tts（TTS WS API v1）→ Web client 播放`
-
-特點：
-- 對外 API 以 `docs/API.md` 的 WebSocket v1 為準（前端可直接照規格實作）
-- `Dummy` engine 用於驗證協定、逐字對齊、cancel/resume、背壓
-- `Piper` engine 提供真實語音（需自行準備 `piper` 執行檔與模型 `.onnx`）
-
----
-
-## Quick Start（本機）
-
-### 0) 建立本機資料夾與 `.env`
+Run from repo root:
 
 ```powershell
-.\scripts\setup_local_dirs.ps1
-```
-
-> `.env` 含敏感資訊不會進 Git；請用 `.env.example` 作為唯一範本。
-
-### 1) 啟動 SGLang（Docker）
-
-```powershell
-cd .\sglang-server
 cp .env.example .env
+# edit .env and set SGLANG_API_KEY (and HF_TOKEN if needed)
 docker compose up -d --build
 ```
 
-> `docker compose up -d` 會一併啟動：`ws_gateway_tts`（預設 dummy）、`orchestrator`、`web`（Nginx 靜態站 + 反代）。
+---
+
+# SGLang Production Server
+
+本地部署的 SGLang 推論服務，針對 **RTX 4060 Ti 8GB** 優化，支援多人併發與複雜 Tool Use。
+
+## 📋 系統需求
+
+| 項目 | 需求 |
+|-----|------|
+| **GPU** | NVIDIA RTX 4060 Ti 8GB |
+| **驅動** | NVIDIA Driver 525+ |
+| **CUDA** | 12.1+ |
+| **Docker** | Docker Desktop with WSL2 |
+| **RAM** | 16GB+ (建議 32GB) |
+
+## 🚀 快速開始
+
+### 1. 配置環境
+
+```powershell
+# 複製環境變數範本
+cp .env.example .env
+
+# 編輯 .env，填入必要配置
+# 務必設定 SGLANG_API_KEY
+```
+
+### 2. 啟動服務
+
+```powershell
+docker compose up -d --build
+```
+
+> Compose 會一併啟動：
+> - `sglang`：`http://<HOST_IP>:8082/`
+> - `ws_gateway_tts`：健康檢查 `http://<HOST_IP>:9000/healthz`
+> - `orchestrator`：健康檢查 `http://<HOST_IP>:9100/healthz`，WS `ws://<HOST_IP>:9100/chat`
+> - `web`：`http://<HOST_IP>:8080/`（同網域反代：`/api`、`/tts`、`/chat`）
+>
+> 備註：SGLang 的 `/health` 預期回 `200` 且 body 為空；可用 `curl -i http://localhost:8082/health` 查看狀態碼與 headers。
+
+### 遠端 client 直連 SGLang（需帶 SGLANG_API_KEY）
+
+```powershell
+curl http://<HOST_IP>:8082/v1/chat/completions `
+  -H "Authorization: Bearer <SGLANG_API_KEY>" `
+  -H "Content-Type: application/json" `
+  -d '{\"model\":\"Qwen/Qwen2.5-1.5B-Instruct\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}],\"stream\":false}'
+```
+
+### 3. 執行壓力測試
+
+```powershell
+# 使用專用的基準測試腳本
+..\.venv\Scripts\python.exe sglang-server\benchmark_final.py --concurrency 20 --total 50
+```
+
+## 🔊 WebSocket 即時 TTS 測試（逐字 / cancel / resume）
+
+此專案可搭配「WS Gateway（對外 WebSocket）」+「Riva TTS（內部 gRPC）」做即時語音串流。
+
+### WS Gateway（預設：Piper 真實語音）
+
+`docker compose up -d --build` 預設會啟用 `Piper`（真實語音）。第一次啟動會自動下載 Piper binary 與預設模型到 Docker named volume（屬正常現象，可能需要幾分鐘）。
+
+> 若你仍聽到「嘟」聲：通常代表 `WS_TTS_ENGINE` 還是 `dummy`，或 Piper 未成功下載/啟動（請看下方驗收與 logs）。
 
 健康檢查：
 
 ```powershell
-curl http://localhost:8082/health
 curl http://localhost:9000/healthz
-curl http://localhost:9100/healthz
 ```
 
-> 備註：SGLang 的 `/health` 預期回 `200` 且 body 為空；可用 `curl -i http://localhost:8082/health` 查看狀態碼與 headers。
-
-### 2) 啟動 Web client
-
-打開：`http://localhost:8080/`（或 `http://<HOST_IP>:8080/`）
-
-同網域路徑（避免 CORS）：
-- `ws://<HOST_IP>:8080/chat` → Orchestrator WebSocket
-- `http://<HOST_IP>:8080/api/v1/...` → SGLang API
-- `ws://<HOST_IP>:8080/tts` → ws_gateway_tts WebSocket
-
-（dev 模式）若你想用本機靜態 server：
+（驗收：確認已切到 piper）
 
 ```powershell
-cd .\web_client
-..\.venv\Scripts\python.exe -m http.server 8000
+# engine_resolved 應該是 "piper"（不是 "dummy"）
+curl http://localhost:9000/healthz
+docker compose logs -f ws_gateway_tts
 ```
 
----
+更換 Piper 模型（進階）：
+- 方式 A（最簡單）：清空 volume 後重啟（會重新下載預設模型）
+  - `docker volume rm sglang_piper-data`（或用 `docker volume ls` 找出實際名稱）
+- 方式 B：在 `.env` 改 `PIPER_MODEL` 與對應的 `PIPER_MODEL_ONNX_URL / PIPER_MODEL_ONNX_SHA256 / PIPER_MODEL_JSON_URL / PIPER_MODEL_JSON_SHA256`，重啟 `ws_gateway_tts`
 
-## 遠端連線（外部機器）
+### WS Gateway（切回 Dummy：除錯用）
 
-### 1) 直連 SGLang（需帶 `SGLANG_API_KEY`）
+若你只想驗證協定/鏈路（不需要真實語音），可切回 `DummyTtsEngine`：
 
 ```powershell
-# 注意：Content-Type 必須是「application/json」（不可被換行切斷成 application/ json）
-$apiKey = "<SGLANG_API_KEY>"
-$body = '{"model":"Qwen/Qwen2.5-1.5B-Instruct","messages":[{"role":"user","content":"你好"}],"stream":false}'
-curl.exe http://<HOST_IP>:8082/v1/chat/completions -H "Authorization: Bearer $apiKey" -H "Content-Type: application/json" -d $body
+# .env
+WS_TTS_ENGINE=dummy
+
+docker compose up -d --build ws_gateway_tts
 ```
 
-（同網域反代）也可改打：`http://<HOST_IP>:8080/api/v1/chat/completions`
+> 提醒：Piper 模型有固定取樣率；例如 `zh_CN-huayan-medium` 是 `22050Hz`（看同資料夾的 `.onnx.json`）。若前端送 `sample_rate=16000`，Gateway 會報錯且聽不到聲音。
 
----
+> 若你需要本機直接啟動（開發/除錯）：仍可用 `..\\.venv\\Scripts\\python.exe -m ws_gateway_tts.server`。
 
-## Dummy vs Piper
+### 基本壓測（50 連線、每秒 5 字、10 分鐘）
 
-- 預設：`WS_TTS_ENGINE=piper`（真實語音）。第一次啟動會自動下載 Piper binary + 預設模型到 Docker named volume（正常現象）。
-- `WS_TTS_ENGINE=dummy`：只會回「可播放音訊」，但不是語音（固定音高的「嘟」聲），用於驗證整條串流鏈路。
+```powershell
+..\.venv\Scripts\python.exe sglang-server\ws_tts_benchmark.py `
+  --url ws://localhost:9000/tts `
+  --concurrency 50 `
+  --cps 5 `
+  --duration 600 `
+  --scenario mixed `
+  --output-json logs/ws_tts_report.json
+```
 
-更換/重置 Piper 模型（最簡單）：`docker volume rm sglang_piper-data` 後再 `docker compose up -d --build`
+### 只跑 baseline（不注入 cancel / resume / 背壓）
 
-驗收（確認不是 dummy）：
-- `curl http://localhost:9000/healthz` 的 `engine_resolved` 應該是 `piper`
-- 若仍是 `dummy`：代表 `sglang-server/.env` 仍是 `WS_TTS_ENGINE=dummy` 或容器未重啟
+```powershell
+..\.venv\Scripts\python.exe sglang-server\ws_tts_benchmark.py --url ws://localhost:9000/tts --scenario baseline
+```
 
----
+## 📦 推薦模型 (RTX 4060 Ti 8GB)
 
-## 常見問題
+| 模型 | VRAM 用量 | 說明 |
+|-----|----------|------|
+| `Qwen/Qwen2.5-3B-Instruct` | ~6GB | 中英文表現佳 |
+| `Qwen/Qwen2.5-1.5B-Instruct` | ~3GB | **預設**，輕量且速度極快 |
 
-- 只有「嘟」聲：代表你在用 `dummy` engine；協定/播放鏈路正常，但尚未接上真實 TTS。
-- Piper 無聲/報錯：常見是 **sample rate 不一致**（例如模型 22050Hz，但 client 送 16000）。
+## 🔧 核心優勢 (SGLang)
 
----
+1. **RadixAttention**: 自動快取 System Prompt 與 Tool 定義，顯著降低重複請求的延遲。
+2. **結構化輸出優化**: 針對 JSON Schema (Function Calling) 有極佳的生成速度。
+3. **高效併發**: 連續批次處理 (Continuous Batching) 充分利用 GPU 算力。
 
-## 重要文件
+## 📁 專案結構
 
-- `docs/API.md`：對外 WebSocket API v1（凍結）
-- `docs/DEPLOY.md`：部署（Nginx WS upgrade、docker-compose 範例）
-- `docs/OPERATE.md`：日常操作與除錯
-- `docs/REPO_INIT.md`：Git LFS / repo 初始化流程
-- `docs/TPS_TUNING.md`：SGLang tool-use TPS 調校策略
-
----
-
-## 專案結構（摘要）
-
-```text
+```
 .
-├── orchestrator/            # Web client ↔ SGLang ↔ ws_gateway_tts
-├── sglang-server/           # SGLang docker-compose + ws_gateway_tts
-│   └── ws_gateway_tts/
-│       └── tts_engines/     # dummy / piper / riva
-├── web_client/              # 純 HTML/JS reference client
-├── docs/                    # API / deploy / operate / repo init
-├── scripts/                 # 開發輔助腳本
-├── logs/                    # 本機輸出（不 commit .json）
-├── models/                  # (ignored) 模型與權重
-└── audio_outputs/           # (ignored) 音檔輸出
+├── docker-compose.yml      # Docker Compose 配置
+├── .env.example            # 環境變數範本
+├── sglang-server/benchmark_final.py      # 最終壓力測試與監控腳本
+├── sglang-server/benchmark_report.md     # 效能測試報告
+├── sglang-server/nginx/                  # Nginx 反向代理配置
+└── sglang-server/monitoring/             # Prometheus 監控配置
 ```

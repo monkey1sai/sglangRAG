@@ -9,6 +9,15 @@
 
 ## 1. 服務啟動（本機/維運最小流程）
 
+(option A: Docker Compose)
+
+```powershell
+cp .env.example .env
+docker compose up -d --build
+```
+
+(option B: run ws_gateway_tts manually for dev/debug)
+
 ```powershell
 cd sglang-server
 $env:WS_TTS_ENGINE="dummy"

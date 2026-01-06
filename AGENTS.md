@@ -2,12 +2,12 @@
 
 ## Project Structure & Module Organization
 此倉庫目前以 SGLang 推論服務為主體，主要內容位於 `sglang-server/`。
-- `sglang-server/docker-compose.yml`: 服務編排與資源設定（SGLang 推論服務）。
+- `docker-compose.yml`: 服務編排與資源設定（SGLang 推論服務）。
 - `sglang-server/nginx/`: 反向代理與 SSL 設定。
 - `sglang-server/monitoring/`: Prometheus 監控設定。
 - `sglang-server/benchmark_final.py`: 核心壓力測試與資源監控腳本。
 - `sglang-server/benchmark_report.md`: 壓測指標與效能回顧。
-根目錄的 `README.md` 說明專案目標；SGLang 部署細節請看 `sglang-server/README.md`。
+- Root README.md is the main doc; compose entry is docker-compose.yml.
 
 ## Build, Test, and Development Commands
 - `cd sglang-server`：切到服務目錄。

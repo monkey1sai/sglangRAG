@@ -16,8 +16,8 @@ services:
       - "8082:30000" # Mapped to host 8082 to avoid conflict with sglang (8081)
     volumes:
       # Reuse the same model cache as sglang
-      - ./models:/root/.cache/huggingface
-      - ./logs:/app/logs
+      - ./sglang-server/models:/root/.cache/huggingface
+      - ./sglang-server/logs:/app/logs
     command: >
       python3 -m sglang.launch_server
       --model-path Qwen/Qwen2.5-1.5B-Instruct
@@ -52,7 +52,7 @@ services:
   # ===========================================
   ws_gateway_tts:
     build:
-      context: ..
+      context: .
       dockerfile: docker/ws_gateway_tts.Dockerfile
     container_name: ws-gateway-tts
     environment:
@@ -99,7 +99,7 @@ services:
   # ===========================================
   orchestrator:
     build:
-      context: ..
+      context: .
       dockerfile: docker/orchestrator.Dockerfile
     container_name: orchestrator
     depends_on:
@@ -139,7 +139,7 @@ services:
   # ===========================================
   web:
     build:
-      context: ..
+      context: .
       dockerfile: docker/web.Dockerfile
     container_name: web
     depends_on:

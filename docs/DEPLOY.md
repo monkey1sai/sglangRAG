@@ -14,7 +14,7 @@
 
 ### SGLang Server
 
-本專案 `sglang-server/docker-compose.yml` 預設對外：
+本專案 `docker-compose.yml` 預設對外：
 - Host：`8082`
 - Container：`30000`
 
@@ -59,7 +59,14 @@
 
 ## 3. Docker Compose（最小形態）
 
-> 建議直接使用本 repo 的 `sglang-server/docker-compose.yml`（已包含 named volume + 自動下載 Piper）。
+(repo root startup)
+
+```powershell
+cp .env.example .env
+docker compose up -d --build
+```
+
+> 建議直接使用本 repo 的 `docker-compose.yml`（已包含 named volume + 自動下載 Piper）。
 
 若你只想單獨部署 ws_gateway_tts，可參考以下示意（重點：named volume 掛載到 `/opt/piper`）：
 

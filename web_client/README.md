@@ -22,7 +22,6 @@
 在專案根目錄：
 
 ```powershell
-cd sglang-server
 cp .env.example .env
 docker compose up -d --build
 ```
