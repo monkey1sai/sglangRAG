@@ -1,6 +1,44 @@
 name: sglang
 services:
   # ===========================================
+  # Optional: fetch/prepare GGUF into a fixed path
+  # ===========================================
+  model_fetch:
+    image: lmsysorg/sglang:latest
+    container_name: sglang-model-fetch
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+      - HUGGINGFACE_HUB_TOKEN=${HF_TOKEN}
+      - SGLANG_GGUF_SOURCE_REPO=${SGLANG_GGUF_SOURCE_REPO:-}
+      - SGLANG_GGUF_SOURCE_FILE=${SGLANG_GGUF_SOURCE_FILE:-}
+    volumes:
+      - ./sglang-server/models:/root/.cache/huggingface
+      - ./sglang-server/models_gguf:/models_gguf
+    command: >
+      bash -lc '
+        set -euo pipefail;
+        mkdir -p /models_gguf;
+        if [ -z "${SGLANG_GGUF_SOURCE_REPO}" ] || [ -z "${SGLANG_GGUF_SOURCE_FILE}" ]; then
+          echo "[model_fetch] skip (SGLANG_GGUF_SOURCE_REPO/SGLANG_GGUF_SOURCE_FILE not set)";
+          touch /models_gguf/.ready;
+          sleep infinity;
+        fi;
+        echo "[model_fetch] downloading ${SGLANG_GGUF_SOURCE_REPO} ${SGLANG_GGUF_SOURCE_FILE}";
+        rm -rf /tmp/gguf && mkdir -p /tmp/gguf;
+        huggingface-cli download "${SGLANG_GGUF_SOURCE_REPO}" "${SGLANG_GGUF_SOURCE_FILE}" --local-dir /tmp/gguf --local-dir-use-symlinks False;
+        cp -f "/tmp/gguf/${SGLANG_GGUF_SOURCE_FILE}" /models_gguf/model.gguf;
+        touch /models_gguf/.ready;
+        echo "[model_fetch] ready: /models_gguf/model.gguf";
+        sleep infinity;
+      '
+    healthcheck:
+      test: ["CMD", "bash", "-lc", "test -f /models_gguf/.ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  # ===========================================
   # SGLang Server (Optimized for Tool Use & Speed)
   # ===========================================
   sglang:
@@ -18,15 +56,29 @@ services:
     volumes:
       # Reuse the same model cache as sglang
       - ./sglang-server/models:/root/.cache/huggingface
+      - ./sglang-server/models_gguf:/models_gguf
       - ./sglang-server/logs:/app/logs
+    depends_on:
+      model_fetch:
+        condition: service_healthy
     command: >
-      python3 -m sglang.launch_server
-      --model-path ${SGLANG_MODEL:-twinkle-ai/Llama-3.2-3B-F1-Instruct}
-      --port 30000
-      --host 0.0.0.0
-      --mem-fraction-static 0.8
-      --context-length 8192
-      --api-key ${SGLANG_API_KEY}
+      bash -lc '
+        set -euo pipefail;
+        ARGS=(python3 -m sglang.launch_server);
+        ARGS+=(--model-path "${SGLANG_MODEL:-twinkle-ai/Llama-3.2-3B-F1-Instruct}");
+        if [ -n "${SGLANG_TOKENIZER_PATH:-}" ]; then ARGS+=(--tokenizer-path "${SGLANG_TOKENIZER_PATH}"); fi;
+        ARGS+=(--port 30000 --host 0.0.0.0);
+        ARGS+=(--mem-fraction-static "${SGLANG_MEM_FRACTION_STATIC:-0.95}");
+        ARGS+=(--context-length "${MAX_MODEL_LEN:-2048}");
+        ARGS+=(--api-key "${SGLANG_API_KEY}");
+        if [ -n "${SGLANG_LOAD_FORMAT:-}" ]; then ARGS+=(--load-format "${SGLANG_LOAD_FORMAT}"); fi;
+        if [ -n "${SGLANG_QUANTIZATION:-}" ]; then ARGS+=(--quantization "${SGLANG_QUANTIZATION}"); fi;
+        if [ -n "${SGLANG_QUANTIZATION_PARAM_PATH:-}" ]; then ARGS+=(--quantization-param-path "${SGLANG_QUANTIZATION_PARAM_PATH}"); fi;
+        if [ -n "${SGLANG_KV_CACHE_DTYPE:-}" ]; then ARGS+=(--kv-cache-dtype "${SGLANG_KV_CACHE_DTYPE}"); fi;
+        if [ -n "${SGLANG_MAX_TOTAL_TOKENS:-}" ]; then ARGS+=(--max-total-tokens "${SGLANG_MAX_TOTAL_TOKENS}"); fi;
+        case "${SGLANG_ALLOW_AUTO_TRUNCATE:-}" in 1|true|yes|y|on) ARGS+=(--allow-auto-truncate) ;; esac;
+        exec "$${ARGS[@]}";
+      '
     deploy:
       resources:
         reservations:
@@ -45,8 +97,8 @@ services:
         ]
       interval: 30s
       timeout: 10s
-      retries: 5
-      start_period: 60s
+      retries: 10
+      start_period: 180s
 
   # ===========================================
   # WebSocket TTS Gateway (Piper by default; first boot auto-download)
@@ -167,7 +219,7 @@ services:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost/healthz"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
       interval: 20s
       timeout: 5s
       retries: 10

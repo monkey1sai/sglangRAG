@@ -147,6 +147,106 @@ curl http://localhost:8082/v1/models -H "Authorization: Bearer <SGLANG_API_KEY>"
 
 ---
 
+### 5.3 SGLang 載入 `twinkle-ai/Llama-3.2-3B-F1-Instruct` 的流程（如何判斷卡在哪）
+
+此 repo 的 `docker-compose.yml` 會把主機路徑掛載到容器內：
+- `./sglang-server/models` → `/root/.cache/huggingface`（HuggingFace cache / snapshots / blobs）
+
+因此第一次啟動或換模型時，下載與載入都會反映在 `sglang-server` logs。
+
+#### A) 你應該看到的典型階段（依序）
+
+1) **找/下載 HuggingFace snapshot**
+   - log 常見：
+     - `Found local HF snapshot ...; skipping download.`
+     - 或下載進度（若 cache 不存在）
+
+2) **載入權重（safetensors 分片）**
+   - log 常見：
+     - `Loading safetensors checkpoint shards: ... 0/2 ... 2/2`
+     - `Load weight end. ... mem usage=...`
+
+3) **初始化 KV cache（容易遇到 VRAM 問題的點）**
+   - log 常見：
+     - `Using KV cache dtype: ...`
+     - `KV Cache is allocated. #tokens: ...`
+   - 若失敗常見：
+     - `RuntimeError: Not enough memory`（KV cache pool 建不起來）
+
+4) **Capture CUDA graph（啟動期間 /health 可能暫時不通）**
+   - log 常見：
+     - `Capture cuda graph begin...`
+     - `Capture cuda graph end...`
+
+5) **服務起來並通過健康檢查**
+   - log 常見：
+     - `Uvicorn running on http://0.0.0.0:30000`
+     - `The server is fired up and ready to roll!`
+   - 這時才建議打：
+     - `curl -i http://localhost:8082/health`
+
+#### B) 建議的觀察指令（直接定位卡在哪一段）
+
+```powershell
+docker compose ps
+docker logs --tail 200 sglang-server
+```
+
+#### C) 8GB GPU 建議參數（避免 KV cache 記憶體不足）
+
+在 `.env` 建議搭配（可視情況微調）：
+- `SGLANG_MODEL=twinkle-ai/Llama-3.2-3B-F1-Instruct`
+- `MAX_MODEL_LEN=2048`（先保守；穩定後再升）
+- `SGLANG_MEM_FRACTION_STATIC=0.95`（不行再試 `0.98`）
+- `SGLANG_KV_CACHE_DTYPE=fp8_e4m3`（降低 KV cache 佔用）
+
+---
+
+### 5.4 Web UI（`http://localhost:8080/`）連得上但「輸出不顯示 / 只出現零星字」的排查
+
+常見根因是：SGLang 對某些請求回 `400`（例如 prompt 太長），orchestrator 走 streaming 時會被中斷，前端只收到非常短的殘片（看起來像沒輸出）。
+
+#### A) 先確認 `orchestrator` 目前用的模型與參數是新的
+
+> 只改 `.env` 不會自動套用到已在跑的容器；需要 `--force-recreate`。
+
+```powershell
+docker compose up -d --force-recreate sglang orchestrator web
+docker compose ps
+```
+
+#### B) 避免 prompt 太長直接 400（建議開自動截斷 + 放大 token budget）
+
+在 `.env` 設定：
+- `SGLANG_MAX_TOTAL_TOKENS=4096`
+- `SGLANG_ALLOW_AUTO_TRUNCATE=1`
+
+然後重啟：
+
+```powershell
+docker compose up -d --force-recreate sglang
+```
+
+#### C) 用 API 直接驗收（排除前端因素）
+
+```powershell
+curl -i http://localhost:8082/health
+curl http://localhost:8082/v1/models -H "Authorization: Bearer <SGLANG_API_KEY>"
+```
+
+---
+
+### 5.5 GGUF 量化補充：若出現「亂字/重複字元」建議回退
+
+實測某些 GGUF 版本可能會出現重複或異常 token（例如大量 `1`、`You`、或重複中文字），導致體感像「輸出壞掉」。
+
+建議優先使用：
+- 原始 HuggingFace 權重（safetensors）+ `SGLANG_KV_CACHE_DTYPE=fp8_e4m3`
+
+若仍要用 GGUF，建議把 GGUF 當作可選方案並做 A/B 驗證，確認輸出品質可接受再切換到線上流量。
+
+---
+
 ## 6. 最小驗收 Checklist（維運/壓測）
 
 - baseline-50（60 秒）：

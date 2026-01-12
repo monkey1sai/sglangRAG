@@ -13,6 +13,11 @@ Tip: to reduce repetitive outputs, tune these in `.env`:
 - `SGLANG_TEMPERATURE`, `SGLANG_TOP_P`, `SGLANG_TOP_K`
 - `SGLANG_REPETITION_PENALTY`
 
+Tip: 若 `sglang` logs 出現 `RuntimeError: Not enough memory`（多半是 KV cache 需要的 VRAM 不夠），優先調整：
+- `.env`：`MAX_MODEL_LEN=2048`（或更低）
+- `.env`：`SGLANG_MEM_FRACTION_STATIC=0.95`（不行再試 `0.98`）
+- 或改用量化權重：`.env` 設 `SGLANG_LOAD_FORMAT` / `SGLANG_QUANTIZATION`（例如 GGUF）
+
 Tip: to debug `orchestrator/server.py` locally while keeping `web` (nginx) at `http://localhost:8080/`:
 1) `docker compose stop orchestrator`
 2) set `.env`: `ORCHESTRATOR_UPSTREAM=host.docker.internal:9100`
@@ -72,6 +77,22 @@ docker compose ps
 docker compose logs --tail 200 sglang
 curl -i http://localhost:8082/health
 curl http://localhost:8082/v1/models -H "Authorization: Bearer <SGLANG_API_KEY>"
+```
+
+### 啟動中：`curl /health` 可能顯示 `Empty reply from server`
+
+這通常只是代表 **模型還在載入、服務尚未開始 listen**，屬正常現象（尤其首次啟動或更換模型時可能需要數分鐘）。
+
+建議以 Compose 狀態為準：
+
+```powershell
+docker compose ps
+```
+
+等 `sglang-server` 變成 `healthy` 後再打：
+
+```powershell
+curl -i http://localhost:8082/health
 ```
 
 常見原因：
@@ -186,3 +207,7 @@ docker compose up -d --build ws_gateway_tts
 ├── sglang-server/nginx/                  # Nginx 反向代理配置
 └── sglang-server/monitoring/             # Prometheus 監控配置
 ```
+
+## 📚 文件索引
+
+- `docs/OPERATE.md`：維運、壓測、以及 SGLang 載入/故障排查（含 `twinkle-ai/Llama-3.2-3B-F1-Instruct` 載入流程）

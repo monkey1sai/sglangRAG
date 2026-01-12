@@ -46,6 +46,10 @@ audio_outputs/**
 models/**
 !models/.gitignore
 
+# SGLang model cache / GGUF artifacts (never commit)
+sglang-server/models/**
+sglang-server/models_gguf/**
+
 # Local vendor binaries (keep public repo clean)
 piper/
 
