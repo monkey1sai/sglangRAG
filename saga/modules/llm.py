@@ -1,11 +1,30 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Callable, Dict
 
 from saga.adapters.sglang_adapter import SGLangAdapter
 from saga.llm.parser import parse_analyzer_output, parse_implementer_output, parse_planner_output
 from saga.llm.prompts import analyzer_prompt, implementer_prompt, planner_prompt
 from saga.modules.base import Module
+
+
+def _call_and_parse(client: SGLangAdapter, prompt: str, parser: Callable[[str], Any], max_retries: int = 3) -> Any:
+    last_exc = None
+    current_prompt = prompt
+    
+    for i in range(max_retries):
+        try:
+            resp = client.call(current_prompt)
+            raw = resp["choices"][0]["message"]["content"]
+            return parser(raw)
+        except Exception as e:
+            last_exc = e
+            # Append error hint for next try
+            current_prompt += f"\n\nSYSTEM: The previous response was invalid JSON. Error: {str(e)}. Please output strict JSON only."
+    
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("Max retries reached")
 
 
 class LLMAnalyzer(Module):
@@ -16,8 +35,7 @@ class LLMAnalyzer(Module):
 
     def run(self, state: Dict[str, Any]) -> Dict[str, Any]:
         prompt = analyzer_prompt(state.get("text", ""), state.get("keywords", []))
-        raw = self.client.call(prompt)["choices"][0]["message"]["content"]
-        return parse_analyzer_output(raw)
+        return _call_and_parse(self.client, prompt, parse_analyzer_output)
 
 
 class LLMPlanner(Module):
@@ -28,8 +46,7 @@ class LLMPlanner(Module):
 
     def run(self, state: Dict[str, Any]) -> Dict[str, Any]:
         prompt = planner_prompt(state.get("analysis", {}))
-        raw = self.client.call(prompt)["choices"][0]["message"]["content"]
-        return parse_planner_output(raw)
+        return _call_and_parse(self.client, prompt, parse_planner_output)
 
 
 class LLMImplementer(Module):
@@ -40,5 +57,4 @@ class LLMImplementer(Module):
 
     def run(self, state: Dict[str, Any]) -> Dict[str, Any]:
         prompt = implementer_prompt(state.get("plan", {}))
-        raw = self.client.call(prompt)["choices"][0]["message"]["content"]
-        return parse_implementer_output(raw)
+        return _call_and_parse(self.client, prompt, parse_implementer_output)

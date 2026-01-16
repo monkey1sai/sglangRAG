@@ -30,7 +30,9 @@ export default function App() {
   const [runId, setRunId] = useState("");
   const [graphJson, setGraphJson] = useState("");
   const [mermaid, setMermaid] = useState("");
+  const [logs, setLogs] = useState([]);
   const wsRef = useRef(null);
+  const logsEndRef = useRef(null);
 
   // New state for advanced features
   const [mode, setMode] = useState("semi-pilot");
@@ -120,6 +122,7 @@ export default function App() {
       wsRef.current = null;
     }
     setEvents([]);
+    setLogs([]);
     setGraphJson("");
     setMermaid("");
     setIteration(0);
@@ -186,6 +189,16 @@ export default function App() {
             fetchArtifacts(msg.run_id);
           }
         }
+
+        if (msg.type === "system_log") {
+          startTransition(() => {
+            setLogs((prev) => [...prev, msg].slice(-100)); // Keep last 100 logs
+          });
+          // Scroll to bottom
+          setTimeout(() => {
+            logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+          }, 100);
+        }
       } catch {
         appendEvent({ type: "raw", message: ev.data });
       }
@@ -210,22 +223,25 @@ export default function App() {
   return (
     <div className="page">
       <header className="hero">
-        <div className="brand">SAGA Advanced</div>
-        <div className="subtitle">Self-evolving Scientific Discovery System</div>
+        <div className="brand">SAGA 進階版</div>
+        <div className="subtitle">自我演化的科學發現系統</div>
         <div className="status-bar">
-          <span className={`status-badge ${uiState}`}>{uiState.toUpperCase()}</span>
-          {iteration > 0 && <span className="iteration-badge">Iteration: {iteration}</span>}
+          <span className={`status-badge ${uiState}`}>
+            {uiState === 'idle' ? '閒置' : uiState === 'running' ? '運行中' : uiState === 'waiting_review' ? '等待審核' : '已完成'}
+          </span>
+          {iteration > 0 && <span className="iteration-badge">迭代輪次：{iteration}</span>}
         </div>
       </header>
 
       <section className="grid">
         {/* Run Controls Panel */}
         <div className="panel">
-          <h2>Run Controls</h2>
+          <h2>執行控制</h2>
+          <p className="help-text">選擇操作模式並輸入待優化的文字，點擊開始執行即可啟動多輪迭代優化。</p>
 
           {/* Mode Selection */}
           <label>
-            Operation Mode
+            操作模式
             <select
               value={mode}
               onChange={(e) => setMode(e.target.value)}
@@ -239,7 +255,7 @@ export default function App() {
           <div className="mode-description">{MODES[mode].description}</div>
 
           <label>
-            WebSocket URL
+            伺服器連線
             <input
               value={wsUrl}
               onChange={(e) => setWsUrl(e.target.value)}
@@ -247,19 +263,21 @@ export default function App() {
             />
           </label>
           <label>
-            Text
+            待優化文字
             <textarea
               value={text}
               onChange={(e) => setText(e.target.value)}
               disabled={isRunning}
+              placeholder="請輸入需要優化的文字內容..."
             />
           </label>
           <label>
-            Keywords (comma-separated)
+            關鍵字（逗號分隔）
             <input
               value={keywords}
               onChange={(e) => setKeywords(e.target.value)}
               disabled={isRunning}
+              placeholder="例如：準確性, 效率, 品質"
             />
           </label>
 
@@ -270,32 +288,34 @@ export default function App() {
               onClick={startRun}
               disabled={isRunning || isWaitingReview}
             >
-              {isPending ? "Starting..." : "Start Run"}
+              {isPending ? "啟動中..." : "開始執行"}
             </button>
 
             {showApproveButton && (
               <>
                 <button className="success" onClick={handleApprove}>
-                  ✓ Approve
+                  ✓ 批准繼續
                 </button>
                 <button className="danger" onClick={handleCancel}>
-                  ✗ Cancel
+                  ✗ 取消執行
                 </button>
               </>
             )}
           </div>
 
-          <div className="meta">Run ID: {runId || "-"}</div>
+          <div className="meta">執行編號：{runId || "尚未開始"}</div>
         </div>
 
         {/* Parameter Settings Panel */}
         <div className="panel">
-          <h2>Scientist Parameters</h2>
+          <h2>科學家參數設定</h2>
+          <p className="help-text">設定演化迴圈的終止條件與多目標優化權重。</p>
 
           <div className="param-group">
-            <h3>Termination Conditions</h3>
+            <h3>終止條件</h3>
             <label>
-              Max Iterations
+              最大迭代次數
+              <span className="param-hint">演化達此輪數後自動停止</span>
               <input
                 type="number"
                 value={maxIters}
@@ -306,7 +326,8 @@ export default function App() {
               />
             </label>
             <label>
-              Convergence Epsilon
+              收斂閾值 (ε)
+              <span className="param-hint">分數變化小於此值視為收斂</span>
               <input
                 type="number"
                 value={convergenceEps}
@@ -316,7 +337,8 @@ export default function App() {
               />
             </label>
             <label>
-              Convergence Patience
+              收斂耐心值
+              <span className="param-hint">連續幾輪無進步後判定收斂</span>
               <input
                 type="number"
                 value={patience}
@@ -328,9 +350,10 @@ export default function App() {
           </div>
 
           <div className="param-group">
-            <h3>Objective Settings</h3>
+            <h3>目標設定</h3>
             <label>
-              Objective Weights
+              目標權重
+              <span className="param-hint">各目標的重要性比例，總和建議為 1</span>
               <input
                 value={weights}
                 onChange={(e) => setWeights(e.target.value)}
@@ -339,7 +362,8 @@ export default function App() {
               />
             </label>
             <label>
-              Goal Thresholds
+              達標門檻
+              <span className="param-hint">各目標達到此分數視為成功</span>
               <input
                 value={thresholds}
                 onChange={(e) => setThresholds(e.target.value)}
@@ -352,16 +376,16 @@ export default function App() {
 
         {/* Analysis Report Panel */}
         <div className="panel">
-          <h2>Analysis Report</h2>
+          <h2>分析報告</h2>
           {analysisReport ? (
             <div className="report-table">
               <table>
                 <thead>
                   <tr>
-                    <th>Metric</th>
-                    <th>Value</th>
-                    <th>Status</th>
-                    <th>Trend</th>
+                    <th>指標</th>
+                    <th>數值</th>
+                    <th>狀態</th>
+                    <th>趨勢</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -377,14 +401,14 @@ export default function App() {
                     </tr>
                   )) || (
                       <tr>
-                        <td colSpan={4}>No data available</td>
+                        <td colSpan={4}>尚無數據</td>
                       </tr>
                     )}
                 </tbody>
               </table>
               {analysisReport.suggested_constraints?.length > 0 && (
                 <div className="constraints">
-                  <h4>Suggested Constraints</h4>
+                  <h4>建議新增約束</h4>
                   <ul>
                     {analysisReport.suggested_constraints.map((c, i) => (
                       <li key={i}>{c}</li>
@@ -394,13 +418,13 @@ export default function App() {
               )}
             </div>
           ) : (
-            <div className="placeholder">(Waiting for analysis...)</div>
+            <div className="placeholder">(等待分析中...)</div>
           )}
         </div>
 
         {/* Events Panel */}
-        <div className="panel">
-          <h2>Events</h2>
+        <div className="panel events-panel">
+          <h2>事件除錯</h2>
           <pre className="events-log">
             {events.map((e, i) => (
               <div key={i} className={`event-line event-${e.type}`}>
@@ -410,15 +434,32 @@ export default function App() {
           </pre>
         </div>
 
+        {/* System Logs Panel */}
+        <div className="panel logs-panel">
+          <h2>系統日誌</h2>
+          <div className="logs-container">
+            {logs.length === 0 && <div className="placeholder">尚無日誌...</div>}
+            {logs.map((log, i) => (
+              <div key={i} className={`log-entry log-${log.level}`}>
+                <span className="log-time">
+                  {new Date(log.timestamp * 1000).toLocaleTimeString()}
+                </span>
+                <span className="log-msg">{log.message}</span>
+              </div>
+            ))}
+            <div ref={logsEndRef} />
+          </div>
+        </div>
+
         {/* Graph JSON Panel */}
         <div className="panel">
-          <h2>Graph JSON</h2>
-          <pre>{graphJson || "(waiting)"}</pre>
+          <h2>運算圖 JSON</h2>
+          <pre>{graphJson || "(等待中)"}</pre>
         </div>
 
         {/* Mermaid Panel */}
         <div className="panel">
-          <h2>Mermaid</h2>
+          <h2>流程圖</h2>
           <MermaidView code={mermaid} />
         </div>
       </section>

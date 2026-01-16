@@ -1,147 +1,148 @@
+"""
+SAGA Runner - Facade for the OuterLoop multi-turn engine.
+"""
 from __future__ import annotations
 
-import json
-import time
+import logging
 import uuid
+import json
 from pathlib import Path
-from typing import Dict, List
+from typing import AsyncIterator, Dict, Any, Optional
 
 from .config import SagaConfig
+from .outer_loop import OuterLoop, LoopState, IterationResult, FinalReport, HumanReviewRequest
+from .mode_controller import ModeController, OperationMode
+from .termination import TerminationChecker, TerminationConfig
+from .modules.advanced_analyzer import AdvancedAnalyzer
+from .modules.advanced_planner import AdvancedPlanner
+from .modules.advanced_implementer import AdvancedImplementer
+from .modules.advanced_optimizer import AdvancedOptimizer
+from .search.generators import LLMGenerator, EvoGenerator
 from .adapters.sglang_adapter import SGLangAdapter
-from .modules.defaults import Analyzer, Planner, Implementer, Optimizer
-from .modules.llm import LLMAnalyzer, LLMPlanner, LLMImplementer
-from .search.beam import beam_search
-from .scoring.sandbox import run_scoring
-from .trace.graph import write_graph, write_mermaid
 from .trace.sqlite import TraceDB
 
+logger = logging.getLogger(__name__)
 
 class SagaRunner:
-    """Run a single SAGA outer/inner loop cycle."""
+    """Orchestrates the SAGA system components."""
+    
     def __init__(self, cfg: SagaConfig):
         self.cfg = cfg
+        
+        # Initialize Core Modules
+        self.analyzer = AdvancedAnalyzer()
+        self.planner = AdvancedPlanner()
+        self.implementer = AdvancedImplementer()
+        
+        # Initialize Generator & Optimizer
         if cfg.use_llm_modules:
-            client = SGLangAdapter(cfg.sglang_url, cfg.sglang_api_key)
-            self.analyzer = LLMAnalyzer(client)
-            self.planner = LLMPlanner(client)
-            self.implementer = LLMImplementer(client)
+            try:
+                client = SGLangAdapter(cfg.sglang_url, cfg.sglang_api_key)
+                self.generator = LLMGenerator(client)
+                logger.info("Initialized LLMGenerator")
+            except Exception as e:
+                logger.warning(f"Failed to init LLMGenerator: {e}, using EvoGenerator")
+                self.generator = EvoGenerator()
         else:
-            self.analyzer = Analyzer()
-            self.planner = Planner()
-            self.implementer = Implementer()
-        self.optimizer = Optimizer()
-
-    def run_once(self, text: str, keywords: List[str], run_id: str | None = None) -> Dict[str, object]:
-        """Execute one SAGA run and persist trace artifacts."""
+            self.generator = EvoGenerator()
+            
+        self.optimizer = AdvancedOptimizer(generator=self.generator)
+        
+    async def run(
+        self, 
+        text: str, 
+        keywords: list[str], 
+        mode: str = "semi-pilot",
+        run_id: Optional[str] = None,
+        config_overrides: Optional[dict] = None
+    ) -> AsyncIterator[Any]:
+        """
+        Execute the SAGA loop.
+        
+        Args:
+            text: Input text/problem description
+            keywords: Initial keywords
+            mode: Operation mode (co-pilot, semi-pilot, autopilot)
+            run_id: Optional run ID
+            config_overrides: Scientist parameters (max_iters, weights, etc.)
+            
+        Yields:
+            OuterLoop events (IterationResult, HumanReviewRequest, FinalReport)
+        """
         run_id = run_id or uuid.uuid4().hex
+        logger.info(f"Starting run {run_id} in {mode} mode")
+        
+        # Merge config
+        overrides = config_overrides or {}
+        term_config = TerminationConfig(
+            max_iters=overrides.get("max_iters", 10),
+            convergence_eps=overrides.get("convergence_eps", 0.001),
+            convergence_patience=overrides.get("convergence_patience", 3),
+            goal_thresholds=self._parse_floats(overrides.get("goal_thresholds", []))
+        )
+        
+        # Initialize Controllers
+        op_mode = OperationMode(mode) if mode in [m.value for m in OperationMode] else OperationMode.SEMI_PILOT
+        mode_controller = ModeController(op_mode)
+        terminator = TerminationChecker(term_config)
+        
+        # Initialize TraceDB
         run_dir = self.cfg.run_path(run_id)
         run_dir.mkdir(parents=True, exist_ok=True)
-        db = TraceDB(run_dir / "trace.db")
-        db.init()
+        trace_db = TraceDB(run_dir / "trace.db")
+        trace_db.init()
+        
+        # Initial State
+        weights = self._parse_floats(overrides.get("weights")) or [1.0]
+        state = LoopState(
+            text=text,
+            keywords=keywords,
+            constraints=[], 
+            candidates=[text[:20]] if text else [], # Initial seed
+            weights=weights
+        )
+        
+        # Create Loop
+        loop = OuterLoop(
+            config=self.cfg,
+            analyzer=self.analyzer,
+            planner=self.planner,
+            implementer=self.implementer,
+            optimizer=self.optimizer,
+            terminator=terminator,
+            mode_controller=mode_controller
+        )
+        
+        # Execute and Yield
+        async for event in loop.run(state, run_id):
+            # Log to TraceDB (Simplified for now, ideally OuterLoop does this via callbacks)
+            if isinstance(event, IterationResult):
+                self._log_iteration(trace_db, event)
+            
+            yield event
 
-        scoring_code = "def score(text, ctx):\n    return [1.0/len(text), 1.0, 1.0]\n"
-        candidates = [text[:20], text[:10]]
-        if self.cfg.use_sglang:
-            adapter = SGLangAdapter(self.cfg.sglang_url, self.cfg.sglang_api_key)
-            prompt = f"請將以下文字摘要成一句話：{text}"
+    def _log_iteration(self, db: TraceDB, result: IterationResult):
+        """Log iteration details to trace DB."""
+        # This maps the new complex objects to the simple TraceDB schema
+        # For MVP, we basically dump the analysis report as a node
+        try:
+            db.write_node({
+                "node_name": f"Iteration_{result.iteration}",
+                "input_summary": f"best_score={result.best_score:.4f}",
+                "output_summary": json.dumps({
+                    "bottleneck": result.analysis_report.bottleneck,
+                    "trend": result.analysis_report.improvement_trend
+                }),
+                "elapsed_ms": result.elapsed_ms
+            })
+        except Exception as e:
+            logger.error(f"Failed to log trace: {e}")
+
+    def _parse_floats(self, val: Any) -> Optional[list[float]]:
+        if isinstance(val, list): return val
+        if isinstance(val, str):
             try:
-                resp = adapter.call(prompt)
-                msg = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
-                if isinstance(msg, str) and msg.strip():
-                    candidates.insert(0, msg.strip())
-            except Exception:
+                return [float(x.strip()) for x in val.split(",") if x.strip()]
+            except:
                 pass
-
-        state = {
-            "text": text,
-            "keywords": keywords,
-            "scoring_code": scoring_code,
-            "candidates": candidates,
-        }
-        goal_set_version = "v1"
-
-        t0 = time.perf_counter()
-        try:
-            analyzer_out = self.analyzer.run(state)
-        except Exception as exc:
-            analyzer_out = {"issues": ["llm_error"], "summary": str(exc)}
-        state["analysis"] = analyzer_out
-        db.write_node(
-            {
-                "node_name": "Analyzer",
-                "input_summary": f"text_len={len(text)} keywords={len(keywords)}",
-                "output_summary": json.dumps(analyzer_out, ensure_ascii=False),
-                "goal_set_version": goal_set_version,
-                "elapsed_ms": int((time.perf_counter() - t0) * 1000),
-            }
-        )
-
-        t1 = time.perf_counter()
-        try:
-            plan = self.planner.run(state)
-        except Exception as exc:
-            plan = {"weights": [0.2, 0.6, 0.2], "summary": f"fallback:{exc}"}
-        state.update(plan)
-        state["plan"] = plan
-        db.write_node(
-            {
-                "node_name": "Planner",
-                "input_summary": json.dumps(analyzer_out, ensure_ascii=False),
-                "output_summary": json.dumps(plan, ensure_ascii=False),
-                "goal_set_version": goal_set_version,
-                "elapsed_ms": int((time.perf_counter() - t1) * 1000),
-            }
-        )
-
-        t2 = time.perf_counter()
-        try:
-            impl = self.implementer.run(state)
-        except Exception as exc:
-            impl = {"scoring_code": scoring_code, "version": "v1", "summary": f"fallback:{exc}"}
-        db.write_node(
-            {
-                "node_name": "Implementer",
-                "input_summary": json.dumps(plan, ensure_ascii=False),
-                "output_summary": f"scoring_version={impl.get('version', '')}",
-                "goal_set_version": goal_set_version,
-                "elapsed_ms": int((time.perf_counter() - t2) * 1000),
-            }
-        )
-
-        def scorer(c: str):
-            ok, result = run_scoring(impl["scoring_code"], c, {"keywords": keywords}, self.cfg.timeout_s)
-            return result if ok else [0.0, 0.0, 0.0]
-
-        t3 = time.perf_counter()
-        scored = beam_search(state["candidates"], scorer, self.cfg.beam_width)
-        db.write_node(
-            {
-                "node_name": "Optimizer",
-                "input_summary": f"beam_width={self.cfg.beam_width}",
-                "output_summary": f"candidates={len(scored)}",
-                "goal_set_version": goal_set_version,
-                "elapsed_ms": int((time.perf_counter() - t3) * 1000),
-            }
-        )
-        best = scored[0][0] if scored else ""
-
-        edges = [
-            {"from": "Analyzer", "to": "Planner"},
-            {"from": "Planner", "to": "Implementer"},
-            {"from": "Implementer", "to": "Optimizer"},
-        ]
-        for e in edges:
-            db.write_edge(e["from"], e["to"])
-
-        for idx, (cand, score_vec) in enumerate(scored):
-            db.write_candidate(
-                f"cand_{idx}",
-                cand,
-                json.dumps(score_vec),
-                json.dumps(plan.get("weights", [])),
-            )
-
-        write_graph(run_dir / "graph.json", db.fetch_nodes(), edges)
-        write_mermaid(run_dir / "workflow.mmd", edges)
-
-        return {"run_id": run_id, "best_candidate": best, "scored": scored}
+        return None

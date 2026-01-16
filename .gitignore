@@ -73,3 +73,6 @@ vllm-server/vllm_log.txt
 # Web client
 web_client/node_modules/
 web_client/dist/
+
+.gemini/
+gha-creds-*.json

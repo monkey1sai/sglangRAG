@@ -1,21 +1,42 @@
 """Configuration for SAGA runs."""
 
 import json
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from pathlib import Path
+
+
+def _bool_from_env(key: str, default: bool = False) -> bool:
+    val = os.getenv(key)
+    if val is None:
+        return default
+    return val.strip().lower() in ("true", "1", "yes", "on")
 
 
 @dataclass
 class SagaConfig:
     """Runtime config for SAGA components."""
-    run_dir: str = "runs"
-    beam_width: int = 3
-    max_iters: int = 2
-    sglang_url: str = "http://localhost:8082/v1/chat/completions"
-    timeout_s: float = 10.0
-    sglang_api_key: str = ""
-    use_sglang: bool = False
-    use_llm_modules: bool = False
+    run_dir: str = field(default_factory=lambda: os.getenv("SAGA_RUN_DIR", "runs"))
+    beam_width: int = field(default_factory=lambda: int(os.getenv("SAGA_BEAM_WIDTH", "3")))
+    max_iters: int = field(default_factory=lambda: int(os.getenv("SAGA_MAX_ITERS", "2")))
+    
+    sglang_url: str = field(default_factory=lambda: os.getenv(
+        "SAGA_SGLANG_URL", 
+        f"{os.getenv('SGLANG_BASE_URL', 'http://localhost:8082').rstrip('/')}/v1/chat/completions"
+    ))
+    
+    timeout_s: float = field(default_factory=lambda: float(os.getenv("SAGA_TIMEOUT_S", "10.0")))
+    sglang_api_key: str = field(default_factory=lambda: os.getenv("SGLANG_API_KEY", ""))
+    
+    use_sglang: bool = field(default_factory=lambda: _bool_from_env(
+        "SAGA_USE_SGLANG", 
+        not _bool_from_env("SAGA_MOCK", False)
+    ))
+    
+    use_llm_modules: bool = field(default_factory=lambda: _bool_from_env(
+        "SAGA_USE_LLM_MODULES", 
+        not _bool_from_env("SAGA_MOCK", False)
+    ))
 
     def run_path(self, run_id: str) -> Path:
         """Return run output directory for the given run_id."""

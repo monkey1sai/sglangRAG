@@ -20,7 +20,14 @@ SAFE_BUILTINS: Dict[str, Any] = {
 
 
 def _worker(code: str, text: str, ctx: Dict[str, Any], q: mp.Queue) -> None:
-    """Execute scoring code in a restricted namespace."""
+    """Execute scoring code in a restricted namespace.
+    
+    Security:
+    - Uses a restricted `__builtins__` containing only safe pure functions.
+    - No file I/O (no `open`).
+    - No module imports (no `__import__`).
+    - Runs in a separate process to isolate memory and allow timeout termination.
+    """
     ns: Dict[str, Any] = {"__builtins__": SAFE_BUILTINS}
     exec(code, ns, ns)
     score_fn = ns.get("score")

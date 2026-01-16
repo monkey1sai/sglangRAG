@@ -12,7 +12,7 @@ Generates comprehensive analysis reports with:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional
 import statistics
 
@@ -50,21 +50,31 @@ class AdvancedAnalyzer:
         
         logger.info(f"[AdvancedAnalyzer] Initialized with config: {self.config}")
     
-    def run(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    def run(self, state: Dict[str, Any] | Any) -> Dict[str, Any]:
         """Analyze current state and generate report data.
         
         Args:
-            state: Current loop state with candidates and scores
+            state: Current loop state (dict or LoopState object)
             
         Returns:
             Dictionary with all analysis metrics
         """
         logger.info("[AdvancedAnalyzer] Starting analysis...")
         
-        candidates = state.get("candidates", [])
-        scores = state.get("scores", [])
-        weights = state.get("weights", [])
-        iteration = state.get("iteration", 0)
+        # Helper to safely retrieve attributes from dict or object
+        def get_val(obj, key, alt_key=None, default=None):
+            val = default
+            if isinstance(obj, dict):
+                val = obj.get(key, obj.get(alt_key) if alt_key else default)
+            else:
+                val = getattr(obj, key, getattr(obj, alt_key, default) if alt_key else default)
+            return val
+
+        candidates = get_val(state, "candidates", default=[])
+        # Try 'current_scores' (LoopState) then 'scores' (legacy dict)
+        scores = get_val(state, "current_scores", "scores", [])
+        weights = get_val(state, "weights", default=[])
+        iteration = get_val(state, "iteration", default=0)
         
         # Calculate score distribution per dimension
         score_distribution = self._calculate_score_distribution(scores)
@@ -142,7 +152,14 @@ class AdvancedAnalyzer:
         
         for i, weight in enumerate(weights):
             goal_name = f"goal_{i}"
-            threshold = thresholds.get(goal_name, 0.7)
+            
+            # Helper to get threshold
+            threshold = 0.7
+            if isinstance(thresholds, dict):
+                threshold = thresholds.get(goal_name, 0.7)
+            elif isinstance(thresholds, list):
+                if i < len(thresholds):
+                    threshold = thresholds[i]
             
             dim_scores = [s[i] for s in scores if len(s) > i]
             if dim_scores:
@@ -245,49 +262,49 @@ class AdvancedAnalyzer:
         pareto_count: int,
         improvement_trend: float,
         bottleneck: str
-    ) -> List[ReportRow]:
+    ) -> List[Dict[str, str]]:
         """Generate structured report table for UI display."""
         rows = []
         
         # Overall metrics
-        rows.append(ReportRow(
+        rows.append(asdict(ReportRow(
             metric="Pareto 前沿數量",
             value=str(pareto_count),
             status="good" if pareto_count >= 3 else "warning",
             trend="→"
-        ))
+        )))
         
-        rows.append(ReportRow(
+        rows.append(asdict(ReportRow(
             metric="改善趨勢",
             value=f"{improvement_trend:+.1%}",
             status="good" if improvement_trend > 0 else ("critical" if improvement_trend < -0.05 else "warning"),
             trend="↑" if improvement_trend > 0 else ("↓" if improvement_trend < 0 else "→")
-        ))
+        )))
         
-        rows.append(ReportRow(
+        rows.append(asdict(ReportRow(
             metric="瓶頸目標",
             value=bottleneck,
             status="warning" if bottleneck != "unknown" else "good",
             trend="→"
-        ))
+        )))
         
         # Goal achievements
         for goal, rate in goal_achievement.items():
-            rows.append(ReportRow(
+            rows.append(asdict(ReportRow(
                 metric=f"{goal} 達成率",
                 value=f"{rate:.1%}",
                 status="good" if rate >= 0.8 else ("warning" if rate >= 0.5 else "critical"),
                 trend="→"
-            ))
+            )))
         
         # Score distributions
         for dim, stats in score_distribution.items():
-            rows.append(ReportRow(
+            rows.append(asdict(ReportRow(
                 metric=f"{dim} 平均",
                 value=f"{stats['avg']:.3f}",
                 status="good" if stats['avg'] >= 0.7 else "warning",
                 trend="→"
-            ))
+            )))
         
         return rows
     

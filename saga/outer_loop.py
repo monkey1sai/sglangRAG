@@ -29,6 +29,7 @@ class LoopState:
     keywords: List[str] = field(default_factory=list)
     constraints: List[str] = field(default_factory=list)
     candidates: List[str] = field(default_factory=list)
+    current_scores: List[List[float]] = field(default_factory=list)
     best_candidate: str = ""
     best_score: float = 0.0
     score_history: List[float] = field(default_factory=list)
@@ -41,6 +42,7 @@ class LoopState:
         """Update state with new candidates from optimization."""
         if new_candidates:
             self.candidates = [c for c, _ in new_candidates]
+            self.current_scores = [s for _, s in new_candidates]
             self.best_candidate = new_candidates[0][0]
             # Calculate weighted score for best candidate
             scores = new_candidates[0][1]
@@ -79,6 +81,14 @@ class IterationResult:
     elapsed_ms: int
     needs_review: bool = False
     review_request: Optional[HumanReviewRequest] = None
+
+
+@dataclass
+class LogEvent:
+    """System log event for UI display."""
+    level: str  # "info", "warning", "error", "success"
+    message: str
+    timestamp: float = field(default_factory=time.time)
 
 
 @dataclass
@@ -129,7 +139,7 @@ class OuterLoop:
         self, 
         initial_state: LoopState,
         run_id: str
-    ) -> AsyncIterator[IterationResult | HumanReviewRequest | FinalReport]:
+    ) -> AsyncIterator[IterationResult | HumanReviewRequest | FinalReport | LogEvent]:
         """Execute the outer loop asynchronously.
         
         Yields iteration results, review requests, and final report.
@@ -139,22 +149,27 @@ class OuterLoop:
         start_time = time.perf_counter()
         
         logger.info(f"[OuterLoop] Starting run {run_id}")
+        yield LogEvent("info", f"Run {run_id} started. Mode: {self.mode.mode.value}")
         
         while not self.terminator.should_stop(state):
             iteration_start = time.perf_counter()
             state.iteration += 1
             
             logger.info(f"[OuterLoop] === Iteration {state.iteration} ===")
+            yield LogEvent("info", f"Starting Iteration {state.iteration}...")
             
             # Step 1: Analyze
             logger.info(f"[OuterLoop] Step 1: Analyzing...")
+            yield LogEvent("info", "Step 1: Analyzing current state metrics...")
             try:
                 analysis_result = await self._run_async(self.analyzer.run, state)
                 report = self._build_analysis_report(analysis_result, state.iteration)
                 state.analysis_reports.append(report)
+                yield LogEvent("success", f"Analysis complete. Found {report.pareto_count} pareto candidates.")
             except Exception as e:
                 logger.error(f"[OuterLoop] Analyzer failed: {e}")
                 report = self._fallback_report(state.iteration, str(e))
+                yield LogEvent("error", f"Analyzer failed: {e}")
             
             # Check if human review needed for analysis
             if self.mode.requires_human_review("analyze"):
@@ -165,10 +180,13 @@ class OuterLoop:
                     iteration=state.iteration
                 )
                 logger.info(f"[OuterLoop] Requesting human review for analysis")
+                yield LogEvent("warning", "Waiting for human review of analysis report...")
                 yield review_request
+                yield LogEvent("success", "Analysis approved.")
             
             # Step 2: Plan
             logger.info(f"[OuterLoop] Step 2: Planning...")
+            yield LogEvent("info", "Step 2: Planning optimization strategy...")
             try:
                 plan_result = await self._run_async(self.planner.run, {
                     "analysis": analysis_result,
@@ -179,9 +197,12 @@ class OuterLoop:
                 state.constraints.extend(new_constraints)
                 state.weights = plan_result.get("weights", state.weights)
                 logger.info(f"[OuterLoop] New constraints: {new_constraints}")
+                if new_constraints:
+                    yield LogEvent("info", f"Added {len(new_constraints)} new constraints.")
             except Exception as e:
                 logger.error(f"[OuterLoop] Planner failed: {e}")
                 new_constraints = []
+                yield LogEvent("error", f"Planner failed: {e}")
             
             # Check if human review needed for plan (Co-pilot mode)
             if self.mode.requires_human_review("plan"):
@@ -192,10 +213,13 @@ class OuterLoop:
                     iteration=state.iteration
                 )
                 logger.info(f"[OuterLoop] Requesting human review for plan")
+                yield LogEvent("warning", "Waiting for human review of plan...")
                 yield review_request
+                yield LogEvent("success", "Plan approved.")
             
             # Step 3: Implement
             logger.info(f"[OuterLoop] Step 3: Implementing...")
+            yield LogEvent("info", "Step 3: Generating scoring code (Implementer)...")
             try:
                 impl_result = await self._run_async(self.implementer.run, {
                     "plan": plan_result,
@@ -205,9 +229,11 @@ class OuterLoop:
             except Exception as e:
                 logger.error(f"[OuterLoop] Implementer failed: {e}")
                 scoring_code = "def score(text, ctx): return [1.0, 1.0, 1.0]"
+                yield LogEvent("error", f"Implementer failed: {e}")
             
             # Step 4: Optimize (inner loop)
             logger.info(f"[OuterLoop] Step 4: Optimizing (inner loop)...")
+            yield LogEvent("info", "Step 4: Running genetic optimization (Inner Loop)...")
             try:
                 optimized = await self._run_async(
                     self.optimizer.optimize,
@@ -216,8 +242,10 @@ class OuterLoop:
                     state.weights
                 )
                 state.update(optimized)
+                yield LogEvent("success", f"Optimization complete. Best score: {state.best_score:.4f}")
             except Exception as e:
                 logger.error(f"[OuterLoop] Optimizer failed: {e}")
+                yield LogEvent("error", f"Optimizer failed: {e}")
             
             iteration_elapsed = int((time.perf_counter() - iteration_start) * 1000)
             
@@ -232,6 +260,7 @@ class OuterLoop:
             )
             
             logger.info(f"[OuterLoop] Iteration {state.iteration} complete: best_score={state.best_score:.4f}, elapsed={iteration_elapsed}ms")
+            yield LogEvent("success", f"Iteration {state.iteration} finished in {iteration_elapsed}ms.")
             yield result
         
         # Generate final report

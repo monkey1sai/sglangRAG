@@ -175,8 +175,15 @@ textarea:disabled {
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.7; }
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.7;
+  }
 }
 
 .mode-description {
@@ -274,9 +281,17 @@ button:disabled {
   margin-right: 6px;
 }
 
-.status-dot.good { background: var(--accent); }
-.status-dot.warning { background: #f59e0b; }
-.status-dot.critical { background: #ef4444; }
+.status-dot.good {
+  background: var(--accent);
+}
+
+.status-dot.warning {
+  background: #f59e0b;
+}
+
+.status-dot.critical {
+  background: #ef4444;
+}
 
 .constraints {
   margin-top: 12px;
@@ -325,4 +340,76 @@ button:disabled {
 
 .event-line.event-ws_error {
   color: #ef4444;
+}
+
+/* System Logs Panel */
+.logs-panel {
+  grid-column: span 2;
+  /* Make it wider if grid allows */
+}
+
+.logs-container {
+  background: #000;
+  border-radius: 8px;
+  padding: 10px;
+  max-height: 300px;
+  overflow-y: auto;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.log-entry {
+  display: flex;
+  gap: 10px;
+  line-height: 1.4;
+}
+
+.log-time {
+  color: #666;
+  min-width: 80px;
+  font-size: 11px;
+}
+
+.log-msg {
+  color: #ddd;
+}
+
+.log-entry.log-info .log-msg {
+  color: #8b9bb4;
+}
+
+.log-entry.log-success .log-msg {
+  color: #5bd3b2;
+}
+
+.log-entry.log-warning .log-msg {
+  color: #f59e0b;
+}
+
+.log-entry.log-error .log-msg {
+  color: #ef4444;
+}
+
+/* Help Text and Parameter Hints */
+.help-text {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  background: rgba(91, 211, 178, 0.05);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+}
+
+.param-hint {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: normal;
+  margin-top: 2px;
+  font-style: italic;
 }

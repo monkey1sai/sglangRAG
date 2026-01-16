@@ -204,6 +204,7 @@ services:
       context: .
       dockerfile: docker/saga_server.Dockerfile
     container_name: saga-server
+    env_file: .env
     environment:
       - SGLANG_URL=${SGLANG_URL:-http://sglang:30000/v1/chat/completions}
     ports:

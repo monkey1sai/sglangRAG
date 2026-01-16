@@ -28,6 +28,7 @@ from saga.modules.advanced_planner import AdvancedPlanner
 from saga.modules.advanced_implementer import AdvancedImplementer
 from saga.modules.advanced_optimizer import AdvancedOptimizer
 from saga.search.generators import LLMGenerator, EvoGenerator
+from saga.adapters.sglang_adapter import SGLangAdapter
 
 # 設定 logging
 logging.basicConfig(
@@ -233,14 +234,28 @@ async def run_symbolic_regression_test():
     planner = AdvancedPlanner()
     implementer = AdvancedImplementer()
     
-    # 使用進化算法生成器 (不依賴 SGLang)
-    generator = EvoGenerator(mutation_rate=0.3, crossover_rate=0.5)
+    # 初始化 SGLang 適配器
+    sglang_url = config.sglang_url or "http://localhost:8082/v1/chat/completions"
+    sglang_api_key = config.sglang_api_key or ""
+    
+    print(f"🔗 SGLang URL: {sglang_url}")
+    
+    try:
+        sglang_client = SGLangAdapter(base_url=sglang_url, api_key=sglang_api_key)
+        # 使用 LLM 驅動的生成器
+        generator = LLMGenerator(client=sglang_client)
+        print("✅ 使用 LLM 驅動的候選生成器")
+    except Exception as e:
+        logger.warning(f"無法初始化 LLMGenerator: {e}，改用 EvoGenerator")
+        generator = EvoGenerator(mutation_rate=0.3, crossover_rate=0.5)
+        print("⚠️ 使用進化算法生成器 (Fallback)")
+    
     optimizer = AdvancedOptimizer(
         generator=generator,
         config={
             "inner_iterations": 3,
             "batch_size": 8,
-            "timeout": 5.0
+            "timeout": 10.0  # LLM 需要較長的超時時間
         }
     )
     
@@ -279,18 +294,14 @@ async def run_symbolic_regression_test():
     
     iteration_results = []
     final_report = None
+    all_reports = []  # 記錄所有輪次的詳細報告
+    
+    import json
+    from datetime import datetime
     
     async for result in loop.run(initial_state, run_id="symbolic_regression_test"):
         if isinstance(result, IterationResult):
             iteration_results.append(result)
-            
-            print(f"📍 Iteration {result.iteration}")
-            print(f"   最佳候選: {result.best_candidate}")
-            print(f"   最佳分數: {result.best_score:.4f}")
-            print(f"   瓶頸: {result.analysis_report.bottleneck}")
-            
-            if result.new_constraints:
-                print(f"   新約束: {result.new_constraints}")
             
             # 計算詳細評分
             scores = score_formula(result.best_candidate, {
@@ -298,7 +309,60 @@ async def run_symbolic_regression_test():
                 "test_x": TEST_X,
                 "test_y": TEST_Y
             })
-            print(f"   詳細評分: 擬合={scores[0]:.3f}, 簡潔={scores[1]:.3f}, 泛化={scores[2]:.3f}")
+            
+            # 建立詳細報告
+            round_report = {
+                "iteration": result.iteration,
+                "timestamp": datetime.now().isoformat(),
+                "best_candidate": result.best_candidate,
+                "best_score": result.best_score,
+                "scores": {
+                    "fit_accuracy": scores[0],
+                    "simplicity": scores[1],
+                    "generalization": scores[2]
+                },
+                "analysis": {
+                    "bottleneck": result.analysis_report.bottleneck,
+                    "pareto_count": result.analysis_report.pareto_count,
+                    "improvement_trend": result.analysis_report.improvement_trend,
+                    "suggested_constraints": result.analysis_report.suggested_constraints
+                },
+                "new_constraints": result.new_constraints,
+                "elapsed_ms": result.elapsed_ms
+            }
+            all_reports.append(round_report)
+            
+            # 輸出詳細報告
+            print("=" * 60)
+            print(f"📍 Iteration {result.iteration} 詳細報告")
+            print("=" * 60)
+            print(f"⏱️  時間戳: {round_report['timestamp']}")
+            print(f"⏱️  耗時: {result.elapsed_ms} ms")
+            print()
+            print(f"🏆 最佳候選: {result.best_candidate}")
+            print(f"📊 加權總分: {result.best_score:.4f}")
+            print()
+            print("📈 詳細評分:")
+            print(f"   擬合精度: {scores[0]:.4f} (權重 50%)")
+            print(f"   公式簡潔: {scores[1]:.4f} (權重 30%)")
+            print(f"   泛化能力: {scores[2]:.4f} (權重 20%)")
+            print()
+            print("🔍 分析結果:")
+            print(f"   瓶頸目標: {result.analysis_report.bottleneck}")
+            print(f"   Pareto 數量: {result.analysis_report.pareto_count}")
+            print(f"   改善趨勢: {result.analysis_report.improvement_trend:+.2%}")
+            
+            if result.analysis_report.suggested_constraints:
+                print(f"   建議約束: {result.analysis_report.suggested_constraints}")
+            
+            if result.new_constraints:
+                print()
+                print("🆕 新增約束:")
+                for c in result.new_constraints:
+                    print(f"   • {c}")
+            
+            print()
+            print("-" * 60)
             print()
             
         elif isinstance(result, HumanReviewRequest):

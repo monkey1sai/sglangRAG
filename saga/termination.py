@@ -136,9 +136,16 @@ class TerminationChecker:
         latest_report = state.analysis_reports[-1]
         goal_achievement = latest_report.goal_achievement
         
-        for goal, threshold in self.goal_thresholds.items():
-            if goal_achievement.get(goal, 0) < threshold:
-                return False
+        # Handle both dict and list formats for thresholds
+        if isinstance(self.goal_thresholds, dict):
+            for goal, threshold in self.goal_thresholds.items():
+                if goal_achievement.get(goal, 0) < threshold:
+                    return False
+        elif isinstance(self.goal_thresholds, list):
+            for i, threshold in enumerate(self.goal_thresholds):
+                goal = f"goal_{i}"
+                if goal_achievement.get(goal, 0) < threshold:
+                    return False
         
         return True
     

@@ -259,11 +259,18 @@ UI 入口：`http://localhost:8080/`
 WebSocket（同網域）：`ws://localhost:8080/ws/run`  
 Run artifacts（同網域）：`http://localhost:8080/runs/<run_id>/workflow.mmd`
 
-## SAGA TODO（待補強）
-- [ ] 在文件中明確聲明：MVP 僅單輪 outer loop，非完整多輪目標演化
-- [ ] 在文件中明確聲明：Optimizer 為 execution-only，不改目標、不改 scoring
-- [ ] 在文件中明確聲明：Replay 僅保證 behavioral replay
-- [ ] 在文件中明確聲明：Inner loop 搜尋策略可替換（Beam/Random/EvoSearch）
-- [ ] 將 Planner 權重實際接入 scoring（目前僅記錄，未影響排序）
-- [ ] LLM JSON schema 偏離時的重試/校驗機制（jsonschema + constrained decoding）
-- [ ] 強化 scoring sandbox（更嚴格 I/O 限制）
+## SAGA Architecture Constraints
+
+1. **Outer Loop Scoping**: 目前 MVP 僅實作 **單輪 (Single-turn)** Outer Loop 用於驗證架構，尚未包含多輪目標動態演化 (Multi-turn Objective Evolution)。
+2. **Optimizer Role**: Optimizer 僅負責 **執行 (Execution-only)** 既定的搜尋策略（如 Beam Search），**絕不** 修改目標權重或評分標準。
+3. **Replay Guarantee**: 系統的 Replay 機制僅保證 **行為重現 (Behavioral Replay)**（重現當初的決策路徑與結果），不保證底層 LLM 的隨機性或 bit-level 一致性。
+4. **Pluggable Inner Loop**: Inner Loop 的搜尋策略是模組化的，目前預設為 Beam Search，但設計上可替換為 Random Search 或 EvoSearch。
+
+## SAGA Implementation Status
+- [x] 在文件中明確聲明：MVP 僅單輪 outer loop，非完整多輪目標演化
+- [x] 在文件中明確聲明：Optimizer 為 execution-only，不改目標、不改 scoring
+- [x] 在文件中明確聲明：Replay 僅保證 behavioral replay
+- [x] 在文件中明確聲明：Inner loop 搜尋策略可替換（Beam/Random/EvoSearch）
+- [x] 將 Planner 權重實際接入 scoring（已在 `beam_search` 中實作加權排序）
+- [x] LLM JSON schema 偏離時的重試/校驗機制（已實作 `_call_and_parse` 自動重試）
+- [x] 強化 scoring sandbox（已明確定義 I/O 限制與隔離模型）

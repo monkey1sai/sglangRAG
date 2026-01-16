@@ -39,3 +39,14 @@
 ## Security & Configuration Tips
 - `.env` 不納入版控，務必設定 `SGLANG_API_KEY` 與 `HF_TOKEN`。
 - HTTPS 憑證在 `sglang-server/nginx/certs/`，生產環境請替換為正式憑證。
+
+## 🤝 Handoff Protocol (AI 交接協議)
+為了防止工作意外中斷導致進度遺失，所有 Agent 在執行任務時必須維護 `docs/current_task.md`。
+
+**執行規範**：
+1. **啟動任務**：Agent 啟動時應先讀取此文件，檢查是否有前一個 Agent 遺留的進度。
+2. **規劃進度**：在修改代碼前，先在該文件中更新 `## Execution Plan`。
+3. **即時記錄**：在執行複雜操作（如大規模 Refactor）或可能導致崩潰的操作前，先寫下 `## Context & Thoughts`。
+4. **交接留言**：若預期對話即時終止，請在 `## Handoff Note` 留下對下一個 Agent 的具體指令。
+
+此協議旨在確保進度可追蹤，並在 AI 換代時達成無縫接軌。
