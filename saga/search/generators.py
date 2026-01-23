@@ -109,24 +109,35 @@ class LLMGenerator(CandidateGenerator):
     def __init__(self, client: Any):
         """Initialize with SGLang adapter client."""
         self.client = client
+        self.keywords = []
+        from .routers import PromptRouter
+        self.router = PromptRouter()
         logger.info("[LLMGenerator] Initialized with SGLang client")
-    
+        
+    def set_context(self, keywords: List[str]):
+        """Set context for prompt routing."""
+        self.keywords = keywords
+
     def generate(
         self, 
         population: List[str], 
         feedback: AnalysisReport,
         num_candidates: int = 5
     ) -> List[str]:
-        logger.info(f"[LLMGenerator] Generating {num_candidates} candidates")
+        strategy = self.router.get_strategy(self.keywords)
+        logger.info(f"[LLMGenerator] Generating {num_candidates} candidates using {strategy.__class__.__name__}")
         logger.debug(f"[LLMGenerator] Population size: {len(population)}, Iteration: {feedback.iteration}")
         
-        # Build prompt with feedback context
-        prompt = self._build_prompt(population, feedback, num_candidates)
+        # Build prompt using strategy
+        prompt = strategy.build_prompt(population, feedback, num_candidates)
         
         try:
-            response = self.client.call(prompt)
+            response = self.client.call(prompt, temperature=0.8) # Increase temp for Math exploration
             raw_content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
-            candidates = self._parse_candidates(raw_content, num_candidates)
+            
+            # Parse using strategy
+            candidates = strategy.parse_candidates(raw_content, num_candidates)
+            
             logger.info(f"[LLMGenerator] Generated {len(candidates)} candidates successfully")
             return candidates
         except Exception as e:
@@ -134,50 +145,42 @@ class LLMGenerator(CandidateGenerator):
             # Fallback: return mutations of existing population
             return self._fallback_generate(population, num_candidates)
     
-    def get_name(self) -> str:
-        return "LLMGenerator"
-    
-    def _build_prompt(self, population: List[str], feedback: AnalysisReport, num: int) -> str:
-        top_candidates = population[:3] if len(population) >= 3 else population
-        
-        prompt = f"""你是一個科學發現助手。基於以下分析反饋，請生成 {num} 個改進的候選方案。
-
-## 當前最佳候選
-{chr(10).join(f'- {c}' for c in top_candidates)}
-
-## 分析反饋
-- 瓶頸目標: {feedback.bottleneck}
-- 改善趨勢: {feedback.improvement_trend:.2%}
-- Pareto 前沿數量: {feedback.pareto_count}
-- 建議約束: {', '.join(feedback.suggested_constraints) if feedback.suggested_constraints else '無'}
-
-## 要求
-請生成 {num} 個新候選，每行一個，格式：
-CANDIDATE: <候選內容>
-
-專注於改善瓶頸目標，同時維持其他目標的表現。"""
-        
-        return prompt
-    
-    def _parse_candidates(self, raw: str, expected: int) -> List[str]:
-        candidates = []
-        for line in raw.split("\n"):
-            if line.strip().startswith("CANDIDATE:"):
-                content = line.split("CANDIDATE:", 1)[1].strip()
-                if content:
-                    candidates.append(content)
-        return candidates[:expected]
-    
     def _fallback_generate(self, population: List[str], num: int) -> List[str]:
         """Fallback generation using simple string manipulation."""
         logger.warning("[LLMGenerator] Using fallback generation")
+        import random
+        
+        # Initial candidates if population is empty or non-mathematical
+        seeds = ["x", "x**2", "x + 1", "2*x", "x*x + x", "x**3"]
+        
         results = []
-        for i, p in enumerate(population[:num]):
-            # Simple mutation: truncate or extend
-            if i % 2 == 0 and len(p) > 10:
-                results.append(p[:len(p)//2])
+        for _ in range(num):
+            if not population:
+                base = random.choice(seeds)
             else:
-                results.append(p + "（改進版）")
+                base = random.choice(population)
+                # Filter out obvious non-formulas
+                if "擬合" in base or len(base) > 50:
+                    base = random.choice(seeds)
+            
+            # Apply random mutation
+            op = random.choice(["add", "sub", "mul", "pow", "coeff"])
+            if op == "add":
+                term = random.choice(["1", "x", "2", "x**2"])
+                new_cand = f"{base} + {term}"
+            elif op == "sub":
+                term = random.choice(["1", "x", "2"])
+                new_cand = f"{base} - {term}"
+            elif op == "mul":
+                term = random.choice(["2", "3", "x"])
+                new_cand = f"({base}) * {term}"
+            elif op == "pow":
+                new_cand = f"({base})**2"
+            else: # coeff
+                new_cand = f"2*({base})"
+                
+            results.append(new_cand)
+            
         return results
 
 

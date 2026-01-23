@@ -19,6 +19,7 @@ from .modules.advanced_implementer import AdvancedImplementer
 from .modules.advanced_optimizer import AdvancedOptimizer
 from .search.generators import LLMGenerator, EvoGenerator
 from .adapters.sglang_adapter import SGLangAdapter
+from .adapters.groq_adapter import GroqAdapter
 from .trace.sqlite import TraceDB
 
 logger = logging.getLogger(__name__)
@@ -35,13 +36,21 @@ class SagaRunner:
         self.implementer = AdvancedImplementer()
         
         # Initialize Generator & Optimizer
-        if cfg.use_llm_modules:
+        if cfg.use_groq:
+            try:
+                client = GroqAdapter(cfg.groq_api_key, cfg.groq_model)
+                self.generator = LLMGenerator(client)
+                logger.info(f"Initialized LLMGenerator with Groq (model={cfg.groq_model})")
+            except Exception as e:
+                logger.warning(f"Failed to init GroqAdapter: {e}, falling back to EvoGenerator")
+                self.generator = EvoGenerator()
+        elif cfg.use_llm_modules:
             try:
                 client = SGLangAdapter(cfg.sglang_url, cfg.sglang_api_key)
                 self.generator = LLMGenerator(client)
-                logger.info("Initialized LLMGenerator")
+                logger.info("Initialized LLMGenerator with SGLang")
             except Exception as e:
-                logger.warning(f"Failed to init LLMGenerator: {e}, using EvoGenerator")
+                logger.warning(f"Failed to init SGLangAdapter: {e}, using EvoGenerator")
                 self.generator = EvoGenerator()
         else:
             self.generator = EvoGenerator()
@@ -95,15 +104,35 @@ class SagaRunner:
         # Initial State
         weights = self._parse_floats(overrides.get("weights")) or [0.33, 0.34, 0.33]
         goal_thresholds = self._parse_floats(overrides.get("goal_thresholds")) or [0.7, 0.7, 0.7]
+        
+        # Enhanced seeding for symbolic regression
+        # CRITICAL FIX: Do NOT include raw 'text' as candidate, because if it evaluates to the dataset itself,
+        # the scorer might give it a perfect score (data matching data), creating a false optimum.
+        initial_candidates = []
+        if any(k in ["x²", "多項式", "擬合", "formula", "equation"] for k in keywords):
+            initial_candidates.extend(["x", "x**2", "x*x + x", "2*x + 1", "x**2 - 1", "0.0 * x"])
+        elif text and len(text) < 50: # Only include text if it's short (likely a formula hint), not a full dataset
+            initial_candidates.append(text)
+            
         state = LoopState(
             text=text,
             keywords=keywords,
             constraints=[], 
-            candidates=[text] if text else [],  # Full text as initial seed
+            candidates=initial_candidates,
             weights=weights,
             goal_thresholds=goal_thresholds
         )
         
+        # Optimize config for speed
+        self.optimizer.config.update({
+            "inner_iterations": 2,  # Reduce from 3 to 2
+            "batch_size": 4,        # Reduce batch size for LLM speed
+            "timeout": 15.0         # Increase timeout for complex evals
+        })
+        
+        if hasattr(self.generator, "set_context"):
+            self.generator.set_context(keywords)
+            
         # Create Loop
         loop = OuterLoop(
             config=self.cfg,

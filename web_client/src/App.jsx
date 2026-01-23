@@ -18,8 +18,35 @@ const MODES = {
 const UI_STATES = {
   IDLE: "idle",
   RUNNING: "running",
+  PAUSED: "paused",
   WAITING_REVIEW: "waiting_review",
   COMPLETED: "completed",
+};
+
+// Preset Templates
+const TEMPLATES = {
+  symbolic_regression: {
+    name: "符號回歸 (Symbolic Regression)",
+    text: "找出擬合以下數據點的數學公式: [(-3,-2),(-2,-4),(-1,-4),(0,-2),(1,2),(2,8),(3,16),(4,26)]",
+    keywords: "x²,多項式,擬合,二次",
+    mode: "autopilot",
+    maxIters: 5,
+    weights: "0.5, 0.3, 0.2",
+    thresholds: "0.95, 0.5, 0.9",
+    convergenceEps: 0.01,
+    patience: 2,
+  },
+  text_optimization: {
+    name: "文字優化",
+    text: "這是一段測試文字",
+    keywords: "準確性,效率,品質",
+    mode: "semi-pilot",
+    maxIters: 10,
+    weights: "0.33, 0.34, 0.33",
+    thresholds: "0.7, 0.7, 0.7",
+    convergenceEps: 0.001,
+    patience: 3,
+  },
 };
 
 export default function App() {
@@ -40,6 +67,9 @@ export default function App() {
   const [iteration, setIteration] = useState(0);
   const [analysisReport, setAnalysisReport] = useState(null);
   const [isPending, startTransition] = useTransition();
+
+  // Current best result (for stop/export)
+  const [currentResult, setCurrentResult] = useState(null);
 
   // Termination parameters
   const [maxIters, setMaxIters] = useState(10);
@@ -116,6 +146,58 @@ export default function App() {
     appendEvent({ type: "user_cancelled" });
   }, [appendEvent]);
 
+  // New: Pause handler
+  const handlePause = useCallback(() => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "pause" }));
+      appendEvent({ type: "user_pause_requested" });
+    }
+  }, [appendEvent]);
+
+  // New: Resume handler
+  const handleResume = useCallback(() => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "resume" }));
+      appendEvent({ type: "user_resume_requested" });
+    }
+  }, [appendEvent]);
+
+  // New: Stop handler
+  const handleStop = useCallback(() => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "stop" }));
+      appendEvent({ type: "user_stop_requested" });
+    }
+  }, [appendEvent]);
+
+  // New: Load template
+  const loadTemplate = useCallback((templateKey) => {
+    const t = TEMPLATES[templateKey];
+    if (t) {
+      setText(t.text);
+      setKeywords(t.keywords);
+      setMode(t.mode);
+      setMaxIters(t.maxIters);
+      setWeights(t.weights);
+      setThresholds(t.thresholds);
+      setConvergenceEps(t.convergenceEps);
+      setPatience(t.patience);
+      appendEvent({ type: "template_loaded", template: templateKey });
+    }
+  }, [appendEvent]);
+
+  // New: Export result
+  const exportResult = useCallback(() => {
+    if (!currentResult) return;
+    const blob = new Blob([JSON.stringify(currentResult, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `saga_result_${runId || "unknown"}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [currentResult, runId]);
+
   const startRun = useCallback(() => {
     if (wsRef.current) {
       wsRef.current.close();
@@ -127,6 +209,7 @@ export default function App() {
     setMermaid("");
     setIteration(0);
     setAnalysisReport(null);
+    setCurrentResult(null);
     setUiState(UI_STATES.RUNNING);
 
     const ws = new WebSocket(wsUrl);
@@ -183,8 +266,32 @@ export default function App() {
           setMode(msg.mode);
         }
 
+        // Handle pause/resume states
+        if (msg.type === "pause_ack" || msg.type === "run_paused") {
+          setUiState(UI_STATES.PAUSED);
+        }
+
+        if (msg.type === "resume_ack") {
+          setUiState(UI_STATES.RUNNING);
+        }
+
+        // Handle stop and export result
+        if (msg.type === "run_stopped") {
+          setUiState(UI_STATES.COMPLETED);
+          if (msg.current_result) {
+            setCurrentResult(msg.current_result);
+          }
+        }
+
         if (msg.type === "run_finished") {
           setUiState(UI_STATES.COMPLETED);
+          setCurrentResult({
+            run_id: msg.run_id,
+            best_candidate: msg.best_candidate,
+            best_score: msg.best_score,
+            termination_reason: msg.termination_reason,
+            total_iterations: msg.total_iterations,
+          });
           if (msg.run_id) {
             fetchArtifacts(msg.run_id);
           }
@@ -217,7 +324,9 @@ export default function App() {
   }, [wsUrl, text, keywordList, mode, maxIters, convergenceEps, patience, weightList, thresholdList, fetchArtifacts, appendEvent, uiState]);
 
   const isRunning = uiState === UI_STATES.RUNNING;
+  const isPaused = uiState === UI_STATES.PAUSED;
   const isWaitingReview = uiState === UI_STATES.WAITING_REVIEW;
+  const isCompleted = uiState === UI_STATES.COMPLETED;
   const showApproveButton = isWaitingReview && mode !== "autopilot";
 
   return (
@@ -227,240 +336,293 @@ export default function App() {
         <div className="subtitle">自我演化的科學發現系統</div>
         <div className="status-bar">
           <span className={`status-badge ${uiState}`}>
-            {uiState === 'idle' ? '閒置' : uiState === 'running' ? '運行中' : uiState === 'waiting_review' ? '等待審核' : '已完成'}
+            {uiState === 'idle' ? '閒置' : uiState === 'running' ? '運行中' : uiState === 'paused' ? '已暫停' : uiState === 'waiting_review' ? '等待審核' : '已完成'}
           </span>
           {iteration > 0 && <span className="iteration-badge">迭代輪次：{iteration}</span>}
         </div>
       </header>
 
-      <section className="grid">
-        {/* Run Controls Panel */}
-        <div className="panel">
-          <h2>執行控制</h2>
-          <p className="help-text">選擇操作模式並輸入待優化的文字，點擊開始執行即可啟動多輪迭代優化。</p>
-
-          {/* Mode Selection */}
-          <label>
-            操作模式
-            <select
-              value={mode}
-              onChange={(e) => setMode(e.target.value)}
-              disabled={isRunning || isWaitingReview}
-            >
-              {Object.entries(MODES).map(([key, { label }]) => (
-                <option key={key} value={key}>{label}</option>
+      <section className="grid three-column">
+        {/* Left Column: Controls */}
+        <div className="column-left">
+          {/* Template Selector */}
+          <div className="panel">
+            <h2>快速模板</h2>
+            <div className="template-buttons">
+              {Object.entries(TEMPLATES).map(([key, t]) => (
+                <button
+                  key={key}
+                  className="template-btn"
+                  onClick={() => loadTemplate(key)}
+                  disabled={isRunning || isPaused}
+                >
+                  {t.name}
+                </button>
               ))}
-            </select>
-          </label>
-          <div className="mode-description">{MODES[mode].description}</div>
+            </div>
+          </div>
 
-          <label>
-            伺服器連線
-            <input
-              value={wsUrl}
-              onChange={(e) => setWsUrl(e.target.value)}
-              disabled={isRunning}
-            />
-          </label>
-          <label>
-            待優化文字
-            <textarea
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              disabled={isRunning}
-              placeholder="請輸入需要優化的文字內容..."
-            />
-          </label>
-          <label>
-            關鍵字（逗號分隔）
-            <input
-              value={keywords}
-              onChange={(e) => setKeywords(e.target.value)}
-              disabled={isRunning}
-              placeholder="例如：準確性, 效率, 品質"
-            />
-          </label>
+          {/* Run Controls Panel */}
+          <div className="panel">
+            <h2>執行控制</h2>
 
-          {/* Action Buttons */}
-          <div className="button-group">
-            <button
-              className="primary"
-              onClick={startRun}
-              disabled={isRunning || isWaitingReview}
-            >
-              {isPending ? "啟動中..." : "開始執行"}
-            </button>
+            {/* Mode Selection */}
+            <label>
+              操作模式
+              <select
+                value={mode}
+                onChange={(e) => setMode(e.target.value)}
+                disabled={isRunning || isWaitingReview || isPaused}
+              >
+                {Object.entries(MODES).map(([key, { label }]) => (
+                  <option key={key} value={key}>{label}</option>
+                ))}
+              </select>
+            </label>
+            <div className="mode-description">{MODES[mode].description}</div>
 
-            {showApproveButton && (
-              <>
-                <button className="success" onClick={handleApprove}>
-                  ✓ 批准繼續
+            <label>
+              待優化文字
+              <textarea
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                disabled={isRunning || isPaused}
+                placeholder="請輸入需要優化的文字內容..."
+              />
+            </label>
+            <label>
+              關鍵字（逗號分隔）
+              <input
+                value={keywords}
+                onChange={(e) => setKeywords(e.target.value)}
+                disabled={isRunning || isPaused}
+                placeholder="例如：準確性, 效率, 品質"
+              />
+            </label>
+
+            {/* Action Buttons */}
+            <div className="button-group">
+              <button
+                className="primary"
+                onClick={startRun}
+                disabled={isRunning || isWaitingReview || isPaused}
+              >
+                {isPending ? "啟動中..." : "▶ 開始執行"}
+              </button>
+
+              {isRunning && (
+                <button className="warning" onClick={handlePause}>
+                  ⏸ 暫停
                 </button>
-                <button className="danger" onClick={handleCancel}>
-                  ✗ 取消執行
+              )}
+
+              {isPaused && (
+                <button className="success" onClick={handleResume}>
+                  ▶ 恢復
                 </button>
-              </>
+              )}
+
+              {(isRunning || isPaused) && (
+                <button className="danger" onClick={handleStop}>
+                  ⏹ 停止
+                </button>
+              )}
+
+              {showApproveButton && (
+                <>
+                  <button className="success" onClick={handleApprove}>
+                    ✓ 批准繼續
+                  </button>
+                  <button className="danger" onClick={handleCancel}>
+                    ✗ 取消執行
+                  </button>
+                </>
+              )}
+            </div>
+
+            <div className="meta">執行編號：{runId || "尚未開始"}</div>
+          </div>
+
+          {/* Parameter Settings Panel */}
+          <div className="panel">
+            <h2>參數設定</h2>
+
+            <div className="param-group">
+              <h3>終止條件</h3>
+              <label>
+                最大迭代
+                <input
+                  type="number"
+                  value={maxIters}
+                  onChange={(e) => setMaxIters(parseInt(e.target.value) || 10)}
+                  min={1}
+                  max={100}
+                  disabled={isRunning || isPaused}
+                />
+              </label>
+              <label>
+                收斂閾值
+                <input
+                  type="number"
+                  value={convergenceEps}
+                  onChange={(e) => setConvergenceEps(parseFloat(e.target.value) || 0.001)}
+                  step={0.001}
+                  disabled={isRunning || isPaused}
+                />
+              </label>
+              <label>
+                耐心值
+                <input
+                  type="number"
+                  value={patience}
+                  onChange={(e) => setPatience(parseInt(e.target.value) || 3)}
+                  min={1}
+                  disabled={isRunning || isPaused}
+                />
+              </label>
+            </div>
+
+            <div className="param-group">
+              <h3>目標權重</h3>
+              <label>
+                權重 (逗號分隔)
+                <input
+                  value={weights}
+                  onChange={(e) => setWeights(e.target.value)}
+                  placeholder="0.5, 0.3, 0.2"
+                  disabled={isRunning || isPaused}
+                />
+              </label>
+              <label>
+                達標門檻
+                <input
+                  value={thresholds}
+                  onChange={(e) => setThresholds(e.target.value)}
+                  placeholder="0.95, 0.5, 0.9"
+                  disabled={isRunning || isPaused}
+                />
+              </label>
+            </div>
+          </div>
+        </div>
+
+        {/* Middle Column: Main Content */}
+        <div className="column-middle">
+          {/* Current Result Panel */}
+          {currentResult && (
+            <div className="panel result-panel">
+              <h2>📊 當前結果</h2>
+              <div className="result-content">
+                <div className="result-item">
+                  <strong>最佳候選：</strong>
+                  <code className="best-candidate">{currentResult.best_candidate}</code>
+                </div>
+                <div className="result-item">
+                  <strong>分數：</strong> {currentResult.best_score?.toFixed(4)}
+                </div>
+                {currentResult.termination_reason && (
+                  <div className="result-item">
+                    <strong>終止原因：</strong> {currentResult.termination_reason}
+                  </div>
+                )}
+              </div>
+              <button className="export-btn" onClick={exportResult}>
+                📥 導出結果 JSON
+              </button>
+            </div>
+          )}
+
+          {/* Analysis Report Panel */}
+          <div className="panel">
+            <h2>分析報告</h2>
+            {analysisReport ? (
+              <div className="report-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>指標</th>
+                      <th>數值</th>
+                      <th>狀態</th>
+                      <th>趨勢</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {analysisReport.report_table?.map((row, idx) => (
+                      <tr key={idx} className={`status-${row.status}`}>
+                        <td>{row.metric}</td>
+                        <td>{row.value}</td>
+                        <td>
+                          <span className={`status-dot ${row.status}`}></span>
+                          {row.status}
+                        </td>
+                        <td>{row.trend}</td>
+                      </tr>
+                    )) || (
+                        <tr>
+                          <td colSpan={4}>尚無數據</td>
+                        </tr>
+                      )}
+                  </tbody>
+                </table>
+                {analysisReport.suggested_constraints?.length > 0 && (
+                  <div className="constraints">
+                    <h4>建議新增約束</h4>
+                    <ul>
+                      {analysisReport.suggested_constraints.map((c, i) => (
+                        <li key={i}>{c}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="placeholder">(等待分析中...)</div>
             )}
           </div>
 
-          <div className="meta">執行編號：{runId || "尚未開始"}</div>
-        </div>
-
-        {/* Parameter Settings Panel */}
-        <div className="panel">
-          <h2>科學家參數設定</h2>
-          <p className="help-text">設定演化迴圈的終止條件與多目標優化權重。</p>
-
-          <div className="param-group">
-            <h3>終止條件</h3>
-            <label>
-              最大迭代次數
-              <span className="param-hint">演化達此輪數後自動停止</span>
-              <input
-                type="number"
-                value={maxIters}
-                onChange={(e) => setMaxIters(parseInt(e.target.value) || 10)}
-                min={1}
-                max={100}
-                disabled={isRunning}
-              />
-            </label>
-            <label>
-              收斂閾值 (ε)
-              <span className="param-hint">分數變化小於此值視為收斂</span>
-              <input
-                type="number"
-                value={convergenceEps}
-                onChange={(e) => setConvergenceEps(parseFloat(e.target.value) || 0.001)}
-                step={0.001}
-                disabled={isRunning}
-              />
-            </label>
-            <label>
-              收斂耐心值
-              <span className="param-hint">連續幾輪無進步後判定收斂</span>
-              <input
-                type="number"
-                value={patience}
-                onChange={(e) => setPatience(parseInt(e.target.value) || 3)}
-                min={1}
-                disabled={isRunning}
-              />
-            </label>
+          {/* Mermaid Panel */}
+          <div className="panel">
+            <h2>流程圖</h2>
+            <MermaidView code={mermaid} />
           </div>
 
-          <div className="param-group">
-            <h3>目標設定</h3>
-            <label>
-              目標權重
-              <span className="param-hint">各目標的重要性比例，總和建議為 1</span>
-              <input
-                value={weights}
-                onChange={(e) => setWeights(e.target.value)}
-                placeholder="0.4, 0.3, 0.3"
-                disabled={isRunning}
-              />
-            </label>
-            <label>
-              達標門檻
-              <span className="param-hint">各目標達到此分數視為成功</span>
-              <input
-                value={thresholds}
-                onChange={(e) => setThresholds(e.target.value)}
-                placeholder="0.8, 0.7, 0.6"
-                disabled={isRunning}
-              />
-            </label>
-          </div>
+          {/* Graph JSON Panel (Collapsible) */}
+          <details className="panel">
+            <summary><h2 style={{ display: 'inline' }}>運算圖 JSON</h2></summary>
+            <pre>{graphJson || "(等待中)"}</pre>
+          </details>
         </div>
 
-        {/* Analysis Report Panel */}
-        <div className="panel">
-          <h2>分析報告</h2>
-          {analysisReport ? (
-            <div className="report-table">
-              <table>
-                <thead>
-                  <tr>
-                    <th>指標</th>
-                    <th>數值</th>
-                    <th>狀態</th>
-                    <th>趨勢</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {analysisReport.report_table?.map((row, idx) => (
-                    <tr key={idx} className={`status-${row.status}`}>
-                      <td>{row.metric}</td>
-                      <td>{row.value}</td>
-                      <td>
-                        <span className={`status-dot ${row.status}`}></span>
-                        {row.status}
-                      </td>
-                      <td>{row.trend}</td>
-                    </tr>
-                  )) || (
-                      <tr>
-                        <td colSpan={4}>尚無數據</td>
-                      </tr>
-                    )}
-                </tbody>
-              </table>
-              {analysisReport.suggested_constraints?.length > 0 && (
-                <div className="constraints">
-                  <h4>建議新增約束</h4>
-                  <ul>
-                    {analysisReport.suggested_constraints.map((c, i) => (
-                      <li key={i}>{c}</li>
-                    ))}
-                  </ul>
+        {/* Right Column: Logs */}
+        <div className="column-right">
+          {/* System Logs Panel */}
+          <div className="panel logs-panel full-height">
+            <h2>系統日誌</h2>
+            <div className="logs-container">
+              {logs.length === 0 && <div className="placeholder">尚無日誌...</div>}
+              {logs.map((log, i) => (
+                <div key={i} className={`log-entry log-${log.level}`}>
+                  <span className="log-time">
+                    {new Date(log.timestamp * 1000).toLocaleTimeString()}
+                  </span>
+                  <span className="log-msg">{log.message}</span>
                 </div>
-              )}
+              ))}
+              <div ref={logsEndRef} />
             </div>
-          ) : (
-            <div className="placeholder">(等待分析中...)</div>
-          )}
-        </div>
-
-        {/* Events Panel */}
-        <div className="panel events-panel">
-          <h2>事件除錯</h2>
-          <pre className="events-log">
-            {events.map((e, i) => (
-              <div key={i} className={`event-line event-${e.type}`}>
-                {JSON.stringify(e)}
-              </div>
-            ))}
-          </pre>
-        </div>
-
-        {/* System Logs Panel */}
-        <div className="panel logs-panel">
-          <h2>系統日誌</h2>
-          <div className="logs-container">
-            {logs.length === 0 && <div className="placeholder">尚無日誌...</div>}
-            {logs.map((log, i) => (
-              <div key={i} className={`log-entry log-${log.level}`}>
-                <span className="log-time">
-                  {new Date(log.timestamp * 1000).toLocaleTimeString()}
-                </span>
-                <span className="log-msg">{log.message}</span>
-              </div>
-            ))}
-            <div ref={logsEndRef} />
           </div>
-        </div>
 
-        {/* Graph JSON Panel */}
-        <div className="panel">
-          <h2>運算圖 JSON</h2>
-          <pre>{graphJson || "(等待中)"}</pre>
-        </div>
-
-        {/* Mermaid Panel */}
-        <div className="panel">
-          <h2>流程圖</h2>
-          <MermaidView code={mermaid} />
+          {/* Events Panel (Collapsible) */}
+          <details className="panel events-panel">
+            <summary><h2 style={{ display: 'inline' }}>事件除錯</h2></summary>
+            <pre className="events-log" style={{ whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+              {events.map((e, i) => (
+                <div key={i} className={`event-line event-${e.type}`}>
+                  {JSON.stringify(e)}
+                </div>
+              ))}
+            </pre>
+          </details>
         </div>
       </section>
     </div>

@@ -37,6 +37,10 @@ class SagaConfig:
         "SAGA_USE_LLM_MODULES", 
         not _bool_from_env("SAGA_MOCK", False)
     ))
+    
+    use_groq: bool = field(default_factory=lambda: _bool_from_env("SAGA_USE_GROQ", False))
+    groq_api_key: str = field(default_factory=lambda: os.getenv("GROQ_API_KEY", ""))
+    groq_model: str = field(default_factory=lambda: os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"))
 
     def run_path(self, run_id: str) -> Path:
         """Return run output directory for the given run_id."""
