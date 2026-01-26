@@ -291,6 +291,15 @@ class OuterLoop:
                 )
                 state.update(optimized)
                 yield LogEvent("success", f"Optimization complete. Best score: {state.best_score:.4f}")
+                
+                # Log LLM interaction if available
+                gen = self.optimizer.generator
+                if hasattr(gen, "get_last_interaction"):
+                    llm_info = gen.get_last_interaction()
+                    if llm_info.get("prompt_preview"):
+                        yield LogEvent("llm", f"[LLM Prompt] {llm_info['prompt_preview'][:200]}...")
+                        yield LogEvent("llm", f"[LLM Response] {llm_info['response_preview'][:300]}...")
+                        yield LogEvent("llm", f"[LLM Parsed] {llm_info['candidate_count']} candidates: {llm_info['parsed_candidates'][:5]}")
             except Exception as e:
                 logger.error(f"[OuterLoop] Optimizer failed: {e}")
                 yield LogEvent("error", f"Optimizer failed: {e}")

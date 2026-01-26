@@ -112,6 +112,11 @@ class LLMGenerator(CandidateGenerator):
         self.keywords = []
         from .routers import PromptRouter
         self.router = PromptRouter()
+        # LLM interaction logging
+        self.last_prompt = ""
+        self.last_response = ""
+        self.last_parsed_candidates = []
+        self.last_filtered_count = 0
         logger.info("[LLMGenerator] Initialized with SGLang client")
         
     def set_context(self, keywords: List[str]):
@@ -130,20 +135,37 @@ class LLMGenerator(CandidateGenerator):
         
         # Build prompt using strategy
         prompt = strategy.build_prompt(population, feedback, num_candidates)
+        self.last_prompt = prompt  # Store for logging
         
         try:
             response = self.client.call(prompt, temperature=0.8) # Increase temp for Math exploration
             raw_content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
+            self.last_response = raw_content  # Store for logging
             
             # Parse using strategy
             candidates = strategy.parse_candidates(raw_content, num_candidates)
+            self.last_parsed_candidates = candidates
             
             logger.info(f"[LLMGenerator] Generated {len(candidates)} candidates successfully")
             return candidates
         except Exception as e:
             logger.error(f"[LLMGenerator] Generation failed: {e}")
+            self.last_response = f"ERROR: {e}"
+            self.last_parsed_candidates = []
             # Fallback: return mutations of existing population
             return self._fallback_generate(population, num_candidates)
+    
+    def get_last_interaction(self) -> dict:
+        """Get the last LLM interaction for logging."""
+        return {
+            "prompt_preview": self.last_prompt[:500] if self.last_prompt else "",
+            "response_preview": self.last_response[:500] if self.last_response else "",
+            "parsed_candidates": self.last_parsed_candidates[:10],
+            "candidate_count": len(self.last_parsed_candidates),
+        }
+    
+    def get_name(self) -> str:
+        return "LLMGenerator"
     
     def _fallback_generate(self, population: List[str], num: int) -> List[str]:
         """Fallback generation using simple string manipulation."""

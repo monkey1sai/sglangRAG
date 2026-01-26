@@ -61,6 +61,7 @@ body {
   .grid.three-column {
     grid-template-columns: 1fr 1fr;
   }
+
   .column-right {
     grid-column: span 2;
   }
@@ -70,6 +71,7 @@ body {
   .grid.three-column {
     grid-template-columns: 1fr;
   }
+
   .column-right {
     grid-column: span 1;
   }
@@ -235,8 +237,15 @@ button.danger {
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.7; }
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.7;
+  }
 }
 
 .mode-description {
@@ -317,9 +326,17 @@ button.danger {
   font-weight: 600;
 }
 
-.report-table tr.status-good td { color: var(--accent); }
-.report-table tr.status-warning td { color: var(--warning); }
-.report-table tr.status-critical td { color: var(--danger); }
+.report-table tr.status-good td {
+  color: var(--accent);
+}
+
+.report-table tr.status-warning td {
+  color: var(--warning);
+}
+
+.report-table tr.status-critical td {
+  color: var(--danger);
+}
 
 .status-dot {
   display: inline-block;
@@ -329,9 +346,17 @@ button.danger {
   margin-right: 4px;
 }
 
-.status-dot.good { background: var(--accent); }
-.status-dot.warning { background: var(--warning); }
-.status-dot.critical { background: var(--danger); }
+.status-dot.good {
+  background: var(--accent);
+}
+
+.status-dot.warning {
+  background: var(--warning);
+}
+
+.status-dot.critical {
+  background: var(--danger);
+}
 
 .constraints {
   margin-top: 10px;
@@ -397,10 +422,27 @@ button.danger {
   word-break: break-word;
 }
 
-.log-entry.log-info .log-msg { color: #8b9bb4; }
-.log-entry.log-success .log-msg { color: var(--accent); }
-.log-entry.log-warning .log-msg { color: var(--warning); }
-.log-entry.log-error .log-msg { color: var(--danger); }
+.log-entry.log-info .log-msg {
+  color: #8b9bb4;
+}
+
+.log-entry.log-success .log-msg {
+  color: var(--accent);
+}
+
+.log-entry.log-warning .log-msg {
+  color: var(--warning);
+}
+
+.log-entry.log-error .log-msg {
+  color: var(--danger);
+}
+
+.log-entry.log-llm .log-msg {
+  color: #60a5fa;
+  font-family: monospace;
+  font-size: 10px;
+}
 
 /* Events Panel */
 .events-panel pre {
@@ -415,9 +457,17 @@ button.danger {
 }
 
 .event-line.event-run_started,
-.event-line.event-run_finished { color: var(--accent); }
-.event-line.event-need_review { color: var(--warning); }
-.event-line.event-ws_error { color: var(--danger); }
+.event-line.event-run_finished {
+  color: var(--accent);
+}
+
+.event-line.event-need_review {
+  color: var(--warning);
+}
+
+.event-line.event-ws_error {
+  color: var(--danger);
+}
 
 /* Collapsible Panels */
 details.panel {
